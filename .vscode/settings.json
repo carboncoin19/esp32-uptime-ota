@@ -1,0 +1,11 @@
+{
+  "idf.currentSetup": "C:\\esp\\v5.5.3\\esp-idf",
+  "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-19.1.2_20250312\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=c:\\Users\\owner\\Documents\\PlatformIO\\Projects\\esp 32\\build"
+  ],
+  "idf.portWin": "COM12",
+  "idf.monitorPort": "COM12"
+}

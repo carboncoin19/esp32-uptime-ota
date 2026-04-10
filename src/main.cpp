@@ -21,7 +21,7 @@
 #ifndef DEVICE_NAME
 #define DEVICE_NAME "NDONI-UPTIME"   // override via platformio.ini build_flags
 #endif
-#define FW_VERSION  "1.0.4"
+#define FW_VERSION  "1.0.5"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -53,7 +53,8 @@
 #define OTA_CHECK_INTERVAL 60000UL
 
 /* ===================== NETWORK ===================== */
-#define SERVER_URL "https://uptime-bot-production-9a37.up.railway.app/api/event"
+#define SERVER_BASE_URL "https://uptime-bot-production-9a37.up.railway.app"
+#define SERVER_URL      SERVER_BASE_URL "/api/event"
 #define NET_CHECK_MS        15000UL
 #define NET_FAIL_THRESHOLD  3
 #define NET_HTTP_TIMEOUT_MS 2500
@@ -383,8 +384,7 @@ bool fetchConfig(){
   if(WiFi.status()!=WL_CONNECTED || !internetOK) return false;
   WiFiClientSecure c; c.setInsecure(); c.setTimeout(10000);
   HTTPClient h; h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  String base = String(SERVER_URL); base.replace("/api/event","");
-  String url = base + "/api/config/" DEVICE_NAME;
+  String url = String(SERVER_BASE_URL) + "/api/config/" DEVICE_NAME;
   if(!h.begin(c,url)) return false;
   int code = h.GET();
   if(code!=200){ h.end(); Serial.println("[CFG] Config fetch failed code="+String(code)); return false; }
@@ -418,9 +418,7 @@ void checkManualUpdate(){
   if(otaInProgress || WiFi.status()!=WL_CONNECTED || !internetOK) return;
 
   HTTPClient h;
-  String base = String(SERVER_URL);
-  base.replace("/api/event", "");
-  String url = base + "/api/fw/" DEVICE_NAME;
+  String url = String(SERVER_BASE_URL) + "/api/fw/" DEVICE_NAME;
 
   WiFiClientSecure c;
   c.setInsecure();
@@ -597,7 +595,11 @@ void loop() {
   ensureTime();
 
   // ---- Fetch WiFi config from server if NVS is empty (first boot after flash)
-  if (!cfgFetched && WiFi.status() == WL_CONNECTED && internetOK) {
+  // Throttled to every 60s to avoid hammering server when /setwifi was never run
+  static unsigned long lastCfgFetchAttempt = 0;
+  if (!cfgFetched && WiFi.status() == WL_CONNECTED && internetOK &&
+      millis() - lastCfgFetchAttempt > 60000UL) {
+    lastCfgFetchAttempt = millis();
     if (fetchConfig()) cfgFetched = true;
   }
 

@@ -390,7 +390,7 @@ app.get("/__debug/fix-ota", async (req, res) => {
       [
         "NDONI-UPTIME",
         "1.0.5",
-        "https://github.com/carboncoin19/esp32-uptime-ota/releases/latest/download/firmware.bin"
+        FW_URLS.esp32
       ]
     );
 
@@ -605,7 +605,7 @@ async function handleUpdate(bot, update) {
     return;
   }
 
-  else if (cmd.startsWith("/update")) {
+  else if (cmd === "/update" || cmd.startsWith("/update ")) {
     console.log("TG /update received:", bot.deviceNorm, cmd);
     try {
       const parts = cmd.split(" ");
@@ -646,7 +646,7 @@ async function handleUpdate(bot, update) {
     return;
   }
 
-  else if (cmd.startsWith("/forceupdate")) {
+  else if (cmd === "/forceupdate" || cmd.startsWith("/forceupdate ")) {
     try {
       const parts = cmd.split(" ");
       const newVersion = parts[1]?.trim();
@@ -689,15 +689,17 @@ async function handleUpdate(bot, update) {
 
   else if (cmd.startsWith("/setwifi")) {
     try {
-      const parts = cmd.split(" ");
-      if (parts.length < 5) {
+      // Split on first 4 spaces only — allows spaces inside passwords
+      const match = cmd.match(/^\/setwifi\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
+      if (!match) {
         await tg(bot.token, chat,
           "❌ Usage: /setwifi <ssid1> <pass1> <ssid2> <pass2>\n" +
+          "Note: SSIDs and passwords must not contain spaces\n" +
           "Example: /setwifi ndoni 12345678 STARLINK mypassword"
         );
         return;
       }
-      const [, ssid1, pass1, ssid2, pass2] = parts;
+      const [, ssid1, pass1, ssid2, pass2] = match;
       await dbRun(
         `INSERT INTO device_config(device,wifi1_ssid,wifi1_pass,wifi2_ssid,wifi2_pass)
          VALUES(?,?,?,?,?)
@@ -1013,10 +1015,6 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("🚀 Server running on port", PORT);
   for (const bot of BOTS) registerWebhook(bot);
 });
-
-
-
-
 
 
 

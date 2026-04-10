@@ -1,0 +1,167 @@
+========================================================
+  UPTIME MONITOR - TELEGRAM BOT COMMAND REFERENCE
+========================================================
+
+------------------------------------------------------------
+STATUS & MONITORING
+------------------------------------------------------------
+
+/start
+  Confirms the bot is active.
+
+/status
+  Shows yesterday's uptime SLA (24h) + current live status.
+
+/statusweek
+  Shows the last 7 days, one bar per day with SLA %.
+
+/statusmonth
+  Shows last 30 days — overall SLA % and total uptime hours.
+
+/fw
+  Shows current firmware version on the device vs latest
+  version set on the server.
+
+------------------------------------------------------------
+OTA FIRMWARE UPDATES
+------------------------------------------------------------
+
+/update <version>
+  Example: /update 1.0.5
+  Sends OTA update request. Device installs only if version
+  is different from what is currently running.
+
+/forceupdate <version>
+  Example: /forceupdate 1.0.5
+  Forces flash even if device already has that version.
+  Use this for re-flashing the same version (e.g. hotfix).
+
+/stopupdate
+  Cancels a pending OTA request before the device picks it up.
+
+How OTA update works:
+  1. Send /update 1.0.5 — server saves the request
+  2. Device polls server every ~60s, sees update pending,
+     downloads and flashes the new firmware
+  3. Device reboots automatically on new firmware
+
+------------------------------------------------------------
+WIFI REMOTE CONFIG
+------------------------------------------------------------
+
+/setwifi <ssid1> <pass1> <ssid2> <pass2>
+  Example: /setwifi HomeNet mypass123 Starlink trojanDelta
+  Saves new WiFi credentials to the server DB for this device.
+  ssid1/pass1 = primary network
+  ssid2/pass2 = fallback network
+
+/resetwifi
+  Tells the device to reboot and fetch new credentials on
+  next poll (~60 seconds).
+
+Workflow to change WiFi on a deployed device:
+  1. Send /setwifi <ssid1> <pass1> <ssid2> <pass2>
+  2. Server confirms credentials saved
+  3. Send /resetwifi
+  4. Within ~60s the device reboots, fetches new credentials,
+     saves to NVS, and reconnects on the new network
+
+------------------------------------------------------------
+NOTES
+------------------------------------------------------------
+
+- Each bot only controls its own device.
+  NDONI bot  → NDONI device only
+  Akabuga bot → Akabuga device only
+
+- WiFi credentials persist in device NVS (flash memory)
+  across OTA updates. Run /setwifi only once per device
+  unless credentials change.
+
+- /update vs /forceupdate:
+  Use /update for normal upgrades.
+  Use /forceupdate only to re-flash the same version.
+
+========================================================
+
+
+========================================================
+  GITHUB DEPLOYMENT — AUTO BUILD & RELEASE
+========================================================
+
+------------------------------------------------------------
+TRIGGER
+------------------------------------------------------------
+
+The build runs automatically when you push a version tag.
+No manual steps needed after that — GitHub does the rest.
+
+git tag v1.0.5
+git push origin v1.0.5
+
+These are the commands to push your local changes to GitHub (run in the VS Code terminal):
+
+
+git add .
+git commit -m "your message here"
+git push origin main
+What each does:
+
+git add . — stages all changed files
+git commit -m "..." — saves a snapshot with a description
+git push origin main — uploads to GitHub
+
+Commands to trigger a release (run in VS Code terminal):
+
+git add .
+git commit -m "Fix fetchConfig throttle, bump to v1.0.5, fix setwifi parsing"
+git tag v1.0.7
+git push origin main
+git push origin v1.0.7
+
+
+------------------------------------------------------------
+WHAT GITHUB ACTIONS DOES (in order)
+------------------------------------------------------------
+
+  1. Checks out your code on a fresh Ubuntu machine
+  2. Installs Python and PlatformIO
+  3. Builds NDONI firmware   (pio run -e ndoni)  → ESP32
+  4. Builds Akabuga firmware (pio run -e akabuga) → ESP32-C3
+  5. Renames the output binaries:
+       firmware-esp32.bin    (for NDONI)
+       firmware-esp32c3.bin  (for Akabuga)
+  6. Creates a GitHub Release at the tag (e.g. v1.0.5) and
+     uploads both .bin files as downloadable assets
+
+------------------------------------------------------------
+HOW OTA LINKS STAY CORRECT AUTOMATICALLY
+------------------------------------------------------------
+
+The server reads TG_BOT_BOARD_1 / TG_BOT_BOARD_2 / TG_BOT_BOARD_3
+Railway environment variables to know which binary URL to use
+per bot. So /update 1.0.5 always sends the right .bin file
+to the right board — no manual URL changes needed.
+
+  TG_BOT_BOARD = esp32    → downloads firmware-esp32.bin
+  TG_BOT_BOARD = esp32c3  → downloads firmware-esp32c3.bin
+
+------------------------------------------------------------
+WORKFLOW FILE LOCATION
+------------------------------------------------------------
+
+  .github/workflows/release.yml
+
+------------------------------------------------------------
+NOTES
+------------------------------------------------------------
+
+- Do NOT skip git push origin main before pushing the tag.
+  The tag must point to a commit that is already on GitHub.
+
+- Check build progress under the Actions tab on GitHub.
+
+- Both firmware files appear under Releases once the
+  build completes successfully.
+
+========================================================

@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ':*)",
+      "Bash(python -c ':*)",
+      "Read(//mnt/c/Windows/**)",
+      "Read(//mnt/c/Users/owner/AppData/Local/Programs/**)",
+      "Bash(node -e ':*)",
+      "Bash(node -e \"const fs=require\\('fs'\\); const d=fs.readFileSync\\('C:/Users/owner/.claude/projects/c--Users-owner-OneDrive-Documents-PlatformIO-Projects-esp-32/2e43f05c-b501-47e8-a074-9c628eb4d620.jsonl','utf8'\\); console.log\\('LEN='+d.length\\); console.log\\('FIRST='+d.substring\\(0,500\\)\\);\")",
+      "Read(//c/Users/owner/.claude/projects/**)",
+      "Read(//c/Users/owner/Documents/PlatformIO/Projects/esp 32/**)",
+      "Read(//c/Users/owner/Documents/PlatformIO/**)",
+      "Bash(pio device:*)",
+      "Bash(python -m esptool chip_id)",
+      "Bash(python3 -m esptool chip_id)",
+      "Bash(~/.platformio/packages/tool-esptoolpy/esptool.py chip_id)",
+      "Bash(cmd.exe /c \"python -m esptool chip_id 2>&1\")",
+      "Bash(cmd.exe /c \"python --version && python -m esptool chip_id\")",
+      "Bash(cmd.exe /c \"where python & where esptool\")",
+      "Bash(cmd.exe /c \"C:\\\\\\\\Users\\\\\\\\owner\\\\\\\\.platformio\\\\\\\\packages\\\\\\\\tool-esptoolpy\\\\\\\\esptool.py chip_id 2>&1\")",
+      "Bash(cmd.exe /c \"C:\\\\\\\\Users\\\\\\\\owner\\\\\\\\.platformio\\\\\\\\penv\\\\\\\\Scripts\\\\\\\\python.exe C:\\\\\\\\Users\\\\\\\\owner\\\\\\\\.platformio\\\\\\\\packages\\\\\\\\tool-esptoolpy\\\\\\\\esptool.py chip_id 2>&1\")",
+      "Bash(powershell.exe -Command \"Get-WmiObject Win32_SerialPort | Select-Object Name, Description, DeviceID | Format-List\")",
+      "Bash(powershell.exe -Command \"& 'C:\\\\Users\\\\owner\\\\.platformio\\\\penv\\\\Scripts\\\\python.exe' 'C:\\\\Users\\\\owner\\\\.platformio\\\\packages\\\\tool-esptoolpy\\\\esptool.py' --port COM11 chip_id 2>&1\")",
+      "Bash(cmd.exe /c \"git config --global user.name & git config --global user.email\")",
+      "Bash(git config:*)",
+      "Bash(curl -s https://api.github.com/repos/carboncoin19/esp32-uptime-ota/releases/latest)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\owner\\.claude\\projects\\c--Users-owner-Documents-PlatformIO-Projects-esp-32"
+    ]
+  }
+}
