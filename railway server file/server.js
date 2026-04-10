@@ -30,7 +30,7 @@ const BOTS = [];
 for (let i = 1; i <= 10; i++) {
   const token  = process.env[`TG_BOT_TOKEN_${i}`];
   const device = process.env[`TG_BOT_DEVICE_${i}`];
-  const board  = (process.env[`TG_BOT_BOARD_${i}`] || "esp32").toLowerCase().replace("-", "");
+  const board  = (process.env[`TG_BOT_BOARD_${i}`] || "esp32").toLowerCase().replaceAll("-", "");
   if (token && device) {
     BOTS.push({
       token,

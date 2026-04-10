@@ -27,7 +27,9 @@
 #ifndef TRACK_PIN
 #define TRACK_PIN   27               // override via platformio.ini build_flags
 #endif
-#define MIRROR_PIN  2
+#ifndef MIRROR_PIN
+#define MIRROR_PIN  2                // override via platformio.ini build_flags
+#endif
 
 /* ===================== TIMING ===================== */
 #define DEBOUNCE_MS   50
