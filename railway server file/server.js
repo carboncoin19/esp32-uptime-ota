@@ -19,20 +19,29 @@ const DAY_MS = 86400000;
 const MIDNIGHT_CHECK_MS = 15000;
 const DEVICE_STALE_MS = 4 * 60 * 1000;
 
+/* ===================== FIRMWARE URL MAP ===================== */
+const FW_URLS = {
+  esp32:   "https://github.com/carboncoin19/esp32-uptime-ota/releases/latest/download/firmware-esp32.bin",
+  esp32c3: "https://github.com/carboncoin19/esp32-uptime-ota/releases/latest/download/firmware-esp32c3.bin",
+};
+
 /* ===================== MULTI BOT CONFIG ===================== */
 const BOTS = [];
 for (let i = 1; i <= 10; i++) {
-  const token = process.env[`TG_BOT_TOKEN_${i}`];
+  const token  = process.env[`TG_BOT_TOKEN_${i}`];
   const device = process.env[`TG_BOT_DEVICE_${i}`];
+  const board  = (process.env[`TG_BOT_BOARD_${i}`] || "esp32").toLowerCase().replace("-", "");
   if (token && device) {
     BOTS.push({
       token,
       device: device.trim(),
       deviceNorm: device.trim().toUpperCase(),
+      board,
+      fwUrl: FW_URLS[board] || FW_URLS.esp32,
     });
   }
 }
-console.log("🤖 Bots loaded:", BOTS.map(b => b.device));
+console.log("🤖 Bots loaded:", BOTS.map(b => `${b.device} (${b.board})`));
 
 /* ===================== FILESYSTEM ===================== */
 if (!fs.existsSync("/data")) fs.mkdirSync("/data", { recursive: true });
@@ -557,22 +566,13 @@ async function handleUpdate(bot, update) {
     try {
       const parts = cmd.split(" ");
       const newVersion = parts[1]?.trim();
-      const customUrl = parts[2]?.trim();
 
       if (!newVersion) {
         await tg(bot.token, chat,
-          "❌ Invalid version.\n" +
-          "Usage: /update <version> [url]\n" +
-          "Example (ESP32): /update 1.0.5\n" +
-          "Example (ESP32-C3): /update 1.0.5 https://example.com/firmware-c3.bin"
+          "❌ Invalid version.\nUsage: /update 1.0.5"
         );
         return;
       }
-
-      const defaultUrl =
-        "https://github.com/carboncoin19/esp32-uptime-ota/releases/latest/download/firmware.bin";
-      const fwUrl = customUrl || defaultUrl;
-      const urlNote = customUrl ? "" : "\n⚠️ Using default ESP32 URL — specify a URL for ESP32-C3 boards";
 
       await dbRun(
         `INSERT INTO firmware_control
@@ -584,7 +584,7 @@ async function handleUpdate(bot, update) {
            firmware_url=excluded.firmware_url,
            update_requested=1,
            force_update=0`,
-        [bot.deviceNorm, newVersion, fwUrl, 1, 0]
+        [bot.deviceNorm, newVersion, bot.fwUrl, 1, 0]
       );
 
       await tg(
@@ -592,8 +592,8 @@ async function handleUpdate(bot, update) {
         chat,
         "🚀 Update requested\n" +
         "📟 " + bot.device + "\n" +
-        "🆕 " + newVersion +
-        urlNote
+        "🆕 " + newVersion + "\n" +
+        "🔧 Board: " + bot.board
       );
     } catch (e) {
       console.error("/update error:", e);
@@ -606,22 +606,13 @@ async function handleUpdate(bot, update) {
     try {
       const parts = cmd.split(" ");
       const newVersion = parts[1]?.trim();
-      const customUrl = parts[2]?.trim();
 
       if (!newVersion) {
         await tg(bot.token, chat,
-          "❌ Invalid version.\n" +
-          "Usage: /forceupdate <version> [url]\n" +
-          "Example (ESP32): /forceupdate 1.0.5\n" +
-          "Example (ESP32-C3): /forceupdate 1.0.5 https://example.com/firmware-c3.bin"
+          "❌ Invalid version.\nUsage: /forceupdate 1.0.5"
         );
         return;
       }
-
-      const defaultUrl =
-        "https://github.com/carboncoin19/esp32-uptime-ota/releases/latest/download/firmware.bin";
-      const fwUrl = customUrl || defaultUrl;
-      const urlNote = customUrl ? "" : "\n⚠️ Using default ESP32 URL — specify a URL for ESP32-C3 boards";
 
       await dbRun(
         `INSERT INTO firmware_control
@@ -633,7 +624,7 @@ async function handleUpdate(bot, update) {
            firmware_url=excluded.firmware_url,
            update_requested=1,
            force_update=1`,
-        [bot.deviceNorm, newVersion, fwUrl, 1, 1]
+        [bot.deviceNorm, newVersion, bot.fwUrl, 1, 1]
       );
 
       await tg(
@@ -642,8 +633,8 @@ async function handleUpdate(bot, update) {
         "🚀 Force update requested\n" +
         "📟 " + bot.device + "\n" +
         "🆕 " + newVersion + "\n" +
-        "⚠️ Will flash even if version matches" +
-        urlNote
+        "🔧 Board: " + bot.board + "\n" +
+        "⚠️ Will flash even if version matches"
       );
     } catch (e) {
       console.error("/forceupdate error:", e);
