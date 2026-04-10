@@ -1,0 +1,44 @@
+name: Build & Release Firmware
+
+# Triggers when you push a tag like: v1.0.5
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build ESP32 firmware (ndoni)
+        run: pio run -e ndoni
+
+      - name: Build ESP32-C3 firmware (akabuga)
+        run: pio run -e akabuga
+
+      - name: Rename binaries
+        run: |
+          cp .pio/build/ndoni/firmware.bin   firmware-esp32.bin
+          cp .pio/build/akabuga/firmware.bin firmware-esp32c3.bin
+
+      - name: Create GitHub Release and upload binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            firmware-esp32.bin
+            firmware-esp32c3.bin
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
