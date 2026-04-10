@@ -30,6 +30,11 @@
 #ifndef MIRROR_PIN
 #define MIRROR_PIN  2                // override via platformio.ini build_flags
 #endif
+#ifdef MIRROR_ACTIVE_LOW
+#define MIRROR_WRITE(v) digitalWrite(MIRROR_PIN, !(v))
+#else
+#define MIRROR_WRITE(v) digitalWrite(MIRROR_PIN, (v))
+#endif
 
 /* ===================== TIMING ===================== */
 #define DEBOUNCE_MS   50
@@ -63,6 +68,15 @@ std::deque<String> eventQueue;
 
 /* ===================== JSON BUFFER ===================== */
 String jsonBuf;
+
+/* ===================== RUNTIME WIFI CONFIG ===================== */
+// Initialized from hardcoded defaults — overwritten from NVS on boot
+// or fetched from server on first connect if NVS is empty
+String cfgWifi1SSID  = WIFI1_SSID;
+String cfgWifi1Pass  = WIFI1_PASSWORD;
+String cfgWifi2SSID  = WIFI2_SSID;
+String cfgWifi2Pass  = WIFI2_PASSWORD;
+bool   cfgFetched    = false; // true once server fetch succeeds this boot
 
 /* ===================== RUNTIME STATE ===================== */
 bool lastStable=false, candidate=false, confirmed=false;
@@ -118,9 +132,9 @@ void connectWiFi(){
   if (millis() - lastWiFiAttempt < wifiRetryInterval) return;
   lastWiFiAttempt = millis();
 
-  // Deterministic fallback: WiFi1 → WiFi2
-  const char* ssid = (wifiPhase == 0) ? WIFI1_SSID : WIFI2_SSID;
-  const char* pass = (wifiPhase == 0) ? WIFI1_PASSWORD : WIFI2_PASSWORD;
+  // Deterministic fallback: WiFi1 → WiFi2 (uses runtime config, falls back to hardcoded)
+  const char* ssid = (wifiPhase == 0) ? cfgWifi1SSID.c_str() : cfgWifi2SSID.c_str();
+  const char* pass = (wifiPhase == 0) ? cfgWifi1Pass.c_str() : cfgWifi2Pass.c_str();
 
   // Hard safety guard (driver protection)
   if (!ssid || strlen(ssid) == 0 || strlen(ssid) > 32) {
@@ -235,7 +249,7 @@ bool trySyncMonthly(uint32_t m, unsigned long u) {
 /* ===================== OTA ===================== */
 void reportOTA(String s,String v){ postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"OTA_"+s+"\",\"version\":\""+v+"\"}"); }
 
-void finalizeUptimeBeforeOTA(){ if(!confirmed) return; unsigned long n=millis(); unsigned long s=n-onStart; dayOnMs+=s; monthOnMs+=s; prefs.putULong("dayOn",dayOnMs); prefs.putULong("monthOn",monthOnMs); confirmed=false; digitalWrite(MIRROR_PIN,LOW); queueEvent("{\"device\":\"" DEVICE_NAME "\",\"event\":\"OFFLINE\",\"time\":\""+timestamp()+"\"}"); processQueue(); }
+void finalizeUptimeBeforeOTA(){ if(!confirmed) return; unsigned long n=millis(); unsigned long s=n-onStart; dayOnMs+=s; monthOnMs+=s; prefs.putULong("dayOn",dayOnMs); prefs.putULong("monthOn",monthOnMs); confirmed=false; MIRROR_WRITE(LOW); queueEvent("{\"device\":\"" DEVICE_NAME "\",\"event\":\"OFFLINE\",\"time\":\""+timestamp()+"\"}"); processQueue(); }
 
 void performOTA(String url, String ver){
   Serial.println("[OTA] ===== OTA START =====");
@@ -357,6 +371,49 @@ void performOTA(String url, String ver){
   ESP.restart();
 }
 
+/* ===================== REMOTE CONFIG ===================== */
+void clearNvsConfig(){
+  prefs.putBool("cfg_ok", false);
+  prefs.remove("w1s"); prefs.remove("w1p");
+  prefs.remove("w2s"); prefs.remove("w2p");
+  Serial.println("[CFG] NVS config cleared — will re-fetch after reboot");
+}
+
+bool fetchConfig(){
+  if(WiFi.status()!=WL_CONNECTED || !internetOK) return false;
+  WiFiClientSecure c; c.setInsecure(); c.setTimeout(10000);
+  HTTPClient h; h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  String base = String(SERVER_URL); base.replace("/api/event","");
+  String url = base + "/api/config/" DEVICE_NAME;
+  if(!h.begin(c,url)) return false;
+  int code = h.GET();
+  if(code!=200){ h.end(); Serial.println("[CFG] Config fetch failed code="+String(code)); return false; }
+  String body = h.getString(); h.end();
+  Serial.println("[CFG] Config response: "+body);
+  if(body.indexOf("\"ok\":true")<0) return false;
+
+  auto getField=[&](const String& key)->String{
+    int idx=body.indexOf(key); if(idx<0) return String();
+    int q1=body.indexOf('"',idx+key.length()); if(q1<0) return String();
+    int q2=body.indexOf('"',q1+1); if(q2<0) return String();
+    return body.substring(q1+1,q2);
+  };
+
+  String s1=getField("\"wifi1_ssid\""), p1=getField("\"wifi1_pass\"");
+  String s2=getField("\"wifi2_ssid\""), p2=getField("\"wifi2_pass\"");
+  if(s1.isEmpty()||p1.isEmpty()){ Serial.println("[CFG] Missing fields in response"); return false; }
+
+  cfgWifi1SSID=s1; cfgWifi1Pass=p1;
+  cfgWifi2SSID=s2.isEmpty()?String(WIFI2_SSID):s2;
+  cfgWifi2Pass=p2.isEmpty()?String(WIFI2_PASSWORD):p2;
+
+  prefs.putString("w1s",cfgWifi1SSID); prefs.putString("w1p",cfgWifi1Pass);
+  prefs.putString("w2s",cfgWifi2SSID); prefs.putString("w2p",cfgWifi2Pass);
+  prefs.putBool("cfg_ok",true);
+  Serial.println("[CFG] WiFi config saved to NVS: "+cfgWifi1SSID+"/"+cfgWifi2SSID);
+  return true;
+}
+
 void checkManualUpdate(){
   if(otaInProgress || WiFi.status()!=WL_CONNECTED || !internetOK) return;
 
@@ -403,6 +460,14 @@ void checkManualUpdate(){
     if (q2 < 0) return String();
     return body.substring(q1 + 1, q2);
   };
+
+  // Server requested config reset — clear NVS and reboot to re-fetch
+  if(body.indexOf("\"reset_config\":true")>=0){
+    Serial.println("[CFG] Server requested config reset — rebooting");
+    clearNvsConfig();
+    delay(1000);
+    ESP.restart();
+  }
 
   if (body.indexOf("\"update\":true") < 0) return;
 
@@ -463,6 +528,18 @@ void setup() {
 
   prefs.begin("uptime", false);
 
+  // Load WiFi credentials from NVS if previously fetched from server
+  if(prefs.getBool("cfg_ok", false)){
+    cfgWifi1SSID = prefs.getString("w1s", WIFI1_SSID);
+    cfgWifi1Pass = prefs.getString("w1p", WIFI1_PASSWORD);
+    cfgWifi2SSID = prefs.getString("w2s", WIFI2_SSID);
+    cfgWifi2Pass = prefs.getString("w2p", WIFI2_PASSWORD);
+    cfgFetched   = true;
+    Serial.println("[CFG] Loaded WiFi config from NVS: "+cfgWifi1SSID+"/"+cfgWifi2SSID);
+  } else {
+    Serial.println("[CFG] No NVS config — using hardcoded defaults, will fetch from server");
+  }
+
   pendingDailySync = prefs.getBool("pendingDS", false);
   pendingDayEpoch = prefs.getUInt("pDay", todayEpoch());
   pendingDayUptime = prefs.getULong("pDayUp", 0);
@@ -480,7 +557,7 @@ void setup() {
   monthOnMs  = prefs.getULong("monthOn", 0);
 
   confirmed = digitalRead(TRACK_PIN);
-  digitalWrite(MIRROR_PIN, confirmed);
+  MIRROR_WRITE(confirmed);
   if (confirmed) onStart = millis();
 
   setupDone = true;
@@ -519,6 +596,11 @@ void loop() {
 
   ensureTime();
 
+  // ---- Fetch WiFi config from server if NVS is empty (first boot after flash)
+  if (!cfgFetched && WiFi.status() == WL_CONNECTED && internetOK) {
+    if (fetchConfig()) cfgFetched = true;
+  }
+
   // ---- Delayed FW_REPORT (queue once when network is ready)
   if (!fwReportSent && WiFi.status() == WL_CONNECTED && internetOK) {
     Serial.println("[DIAG] Queuing FW_REPORT (delayed)");
@@ -551,7 +633,7 @@ void loop() {
 
     if (now - candidateSince >= CONFIRM_MS && candidate != confirmed) {
       confirmed = candidate;
-      digitalWrite(MIRROR_PIN, confirmed);
+      MIRROR_WRITE(confirmed);
 
       if (confirmed) {
         onStart = now;

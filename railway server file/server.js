@@ -131,6 +131,14 @@ const migrationCallback = (err) => {
     );
   }
 
+  if (!has("reset_config")) {
+    pending++;
+    db.run(
+      `ALTER TABLE firmware_control ADD COLUMN reset_config INTEGER DEFAULT 0`,
+      migrationCallback
+    );
+  }
+
 // If nothing to migrate, mark ready immediately
 if (pending === 0) {
   firmwareSchemaReady = true;
@@ -173,6 +181,16 @@ db.run(`
     month INTEGER,
     uptime_ms INTEGER,
     PRIMARY KEY (device, month)
+  )
+`);
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS device_config (
+    device TEXT PRIMARY KEY,
+    wifi1_ssid TEXT,
+    wifi1_pass TEXT,
+    wifi2_ssid TEXT,
+    wifi2_pass TEXT
   )
 `);
 
@@ -516,14 +534,20 @@ app.get("/api/fw/:device", async (req, res) => {
   try {
     const row = await dbGet(
       `SELECT latest_version, firmware_url,
-              update_requested, force_update
+              update_requested, force_update, reset_config
        FROM firmware_control
        WHERE device=?`,
       [dev]
     );
 
+    // Send reset_config flag if set, then clear it immediately
+    const resetConfig = row?.reset_config === 1;
+    if (resetConfig) {
+      await dbRun(`UPDATE firmware_control SET reset_config=0 WHERE device=?`, [dev]);
+    }
+
     if (!row || row.update_requested !== 1 || !row.latest_version || !row.firmware_url) {
-      return res.json({ update: false });
+      return res.json({ update: false, reset_config: resetConfig });
     }
 
     res.json({
@@ -531,11 +555,31 @@ app.get("/api/fw/:device", async (req, res) => {
       version: row.latest_version,
       url: row.firmware_url,
       force: row.force_update === 1,
+      reset_config: resetConfig,
       trigger: true
     });
   } catch (e) {
     console.error("❌ /api/fw error:", e.message);
     res.json({ update: false });
+  }
+});
+
+/* ===================== DEVICE CONFIG API ===================== */
+app.get("/api/config/:device", async (req, res) => {
+  const dev = req.params.device.trim().toUpperCase();
+  try {
+    const row = await dbGet(`SELECT * FROM device_config WHERE device=?`, [dev]);
+    if (!row || !row.wifi1_ssid) return res.json({ ok: false });
+    res.json({
+      ok: true,
+      wifi1_ssid: row.wifi1_ssid,
+      wifi1_pass: row.wifi1_pass,
+      wifi2_ssid: row.wifi2_ssid,
+      wifi2_pass: row.wifi2_pass,
+    });
+  } catch (e) {
+    console.error("❌ /api/config error:", e.message);
+    res.status(500).json({ ok: false });
   }
 });
 
@@ -639,6 +683,57 @@ async function handleUpdate(bot, update) {
     } catch (e) {
       console.error("/forceupdate error:", e);
       await tg(bot.token, chat, "⚠️ Force update request failed, please try again");
+    }
+    return;
+  }
+
+  else if (cmd.startsWith("/setwifi")) {
+    try {
+      const parts = cmd.split(" ");
+      if (parts.length < 5) {
+        await tg(bot.token, chat,
+          "❌ Usage: /setwifi <ssid1> <pass1> <ssid2> <pass2>\n" +
+          "Example: /setwifi ndoni 12345678 STARLINK mypassword"
+        );
+        return;
+      }
+      const [, ssid1, pass1, ssid2, pass2] = parts;
+      await dbRun(
+        `INSERT INTO device_config(device,wifi1_ssid,wifi1_pass,wifi2_ssid,wifi2_pass)
+         VALUES(?,?,?,?,?)
+         ON CONFLICT(device) DO UPDATE SET
+           wifi1_ssid=excluded.wifi1_ssid, wifi1_pass=excluded.wifi1_pass,
+           wifi2_ssid=excluded.wifi2_ssid, wifi2_pass=excluded.wifi2_pass`,
+        [bot.deviceNorm, ssid1, pass1, ssid2, pass2]
+      );
+      await tg(bot.token, chat,
+        "✅ WiFi config saved for " + bot.device + "\n" +
+        "📶 WiFi1: " + ssid1 + "\n" +
+        "📶 WiFi2: " + ssid2 + "\n" +
+        "Send /resetwifi to push to device on next poll"
+      );
+    } catch (e) {
+      console.error("/setwifi error:", e);
+      await tg(bot.token, chat, "⚠️ Failed to save WiFi config");
+    }
+    return;
+  }
+
+  else if (cmd === "/resetwifi") {
+    try {
+      await dbRun(
+        `INSERT INTO firmware_control(device, reset_config)
+         VALUES(?,1)
+         ON CONFLICT(device) DO UPDATE SET reset_config=1`,
+        [bot.deviceNorm]
+      );
+      await tg(bot.token, chat,
+        "🔄 Config reset requested for " + bot.device + "\n" +
+        "Device will fetch new WiFi credentials on next poll (~60s) and reboot"
+      );
+    } catch (e) {
+      console.error("/resetwifi error:", e);
+      await tg(bot.token, chat, "⚠️ Failed to request config reset");
     }
     return;
   }
