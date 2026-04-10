@@ -114,7 +114,7 @@ git push origin main — uploads to GitHub
 Commands to trigger a release (run in VS Code terminal):
 
 git add .
-git commit -m "Fix fetchConfig throttle, bump to v1.0.5, fix setwifi parsing"
+git commit -m "akabuga mifi"
 git tag v1.0.7
 git push origin main
 git push origin v1.0.7
