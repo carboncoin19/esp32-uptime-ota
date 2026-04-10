@@ -21,7 +21,7 @@
 #ifndef DEVICE_NAME
 #define DEVICE_NAME "NDONI-UPTIME"   // override via platformio.ini build_flags
 #endif
-#define FW_VERSION  "1.0.5"
+#define FW_VERSION  "1.0.8"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN

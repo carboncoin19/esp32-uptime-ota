@@ -115,9 +115,9 @@ Commands to trigger a release (run in VS Code terminal):
 
 git add .
 git commit -m "akabuga mifi"
-git tag v1.0.7
+git tag v1.0.8
 git push origin main
-git push origin v1.0.7
+git push origin v1.0.8
 
 
 ------------------------------------------------------------
