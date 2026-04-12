@@ -521,10 +521,11 @@ app.post("/api/event", async (req, res) => {
       // BOOT_REPORT also carries WiFi info — send connected notification
       if (event === "BOOT_REPORT" && ssid) {
         await dbRun(
-          `INSERT INTO devices(device,last_seen,wifi_ssid,wifi_ip)
-           VALUES(?,?,?,?)
+          `INSERT INTO devices(device,last_seen,status,wifi_ssid,wifi_ip)
+           VALUES(?,?,'ONLINE',?,?)
            ON CONFLICT(device)
            DO UPDATE SET last_seen=excluded.last_seen,
+                         status='ONLINE',
                          wifi_ssid=excluded.wifi_ssid,
                          wifi_ip=excluded.wifi_ip`,
           [dev, now, ssid, ip || null]
@@ -784,19 +785,25 @@ async function handleUpdate(bot, update) {
       // ssid1 may contain spaces — everything between /setwifi and the last 3 tokens.
       const tokens = cmd.trim().split(/\s+/);
       // tokens[0] = "/setwifi", need at least 5 tokens total
+      // IMPORTANT: only ssid1 may contain spaces — ssid2, pass1, pass2 must be single words
+      const USAGE =
+        "❌ Usage: /setwifi <ssid1> <pass1> <ssid2> <pass2>\n" +
+        "Only ssid1 may contain spaces. ssid2, pass1, pass2 must be single words.\n" +
+        "Example (ssid1 has space): /setwifi Star Home 12345678 mifi 12345678\n" +
+        "Example (no spaces):       /setwifi mifi 12345678 Starlink abc123";
       if (tokens.length < 5) {
-        await tg(bot.token, chat,
-          "❌ Usage: /setwifi <ssid1> <pass1> <ssid2> <pass2>\n" +
-          "pass1, ssid2, pass2 must not contain spaces\n" +
-          "ssid1 may contain spaces (e.g. Star Home)\n" +
-          "Example: /setwifi Star Home 12345678 mifi 12345678"
-        );
+        await tg(bot.token, chat, USAGE);
         return;
       }
       const pass2 = tokens[tokens.length - 1];
       const ssid2 = tokens[tokens.length - 2];
       const pass1 = tokens[tokens.length - 3];
       const ssid1 = tokens.slice(1, tokens.length - 3).join(" ");
+      // Guard: ssid1 must not be empty after parsing
+      if (!ssid1.trim()) {
+        await tg(bot.token, chat, USAGE);
+        return;
+      }
       await dbRun(
         `INSERT INTO device_config(device,wifi1_ssid,wifi1_pass,wifi2_ssid,wifi2_pass)
          VALUES(?,?,?,?,?)
@@ -807,8 +814,11 @@ async function handleUpdate(bot, update) {
       );
       await tg(bot.token, chat,
         "✅ WiFi config saved for " + bot.device + "\n" +
-        "📶 WiFi1: " + ssid1 + "\n" +
-        "📶 WiFi2: " + ssid2 + "\n" +
+        "📶 WiFi1 SSID: " + ssid1 + "\n" +
+        "📶 WiFi1 Pass: " + pass1 + "\n" +
+        "📶 WiFi2 SSID: " + ssid2 + "\n" +
+        "📶 WiFi2 Pass: " + pass2 + "\n" +
+        "⚠️ If any field looks wrong, re-send /setwifi\n" +
         "Send /resetwifi to push to device on next poll"
       );
     } catch (e) {

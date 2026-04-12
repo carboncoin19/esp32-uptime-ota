@@ -535,6 +535,7 @@ void setup() {
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     wifiRetryInterval = WIFI_RETRY_MS;
     lastWiFiAttempt = 0; // allow connectWiFi() to fire immediately if called again
+    firstNetCheck = true; // trigger immediate internet check on every reconnect
     Serial.println("[WiFi] IP obtained — backoff reset instantly");
   }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
 
