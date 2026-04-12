@@ -448,9 +448,8 @@ app.post("/api/event", async (req, res) => {
         [dev]
       );
       const resetConfig = fwRow?.reset_config === 1;
-      if (resetConfig) {
-        await dbRun(`UPDATE firmware_control SET reset_config=0 WHERE device=?`, [dev]);
-      }
+      // Do NOT clear reset_config here — clear it only when device confirms via WIFI_RESET event.
+      // This prevents silent loss if the device drops the connection before processing.
       const hasUpdate = fwRow?.update_requested === 1 && fwRow?.latest_version && fwRow?.firmware_url;
       return res.json({
         ok: true,
@@ -575,6 +574,8 @@ app.post("/api/event", async (req, res) => {
     }
 
     if (event === "WIFI_RESET") {
+      // Device confirmed it cleared NVS — now safe to clear the flag
+      await dbRun(`UPDATE firmware_control SET reset_config=0 WHERE device=?`, [dev]);
       const msg =
         `🔄 WiFi reset applied on ${dev}\n` +
         `NVS cleared — rebooting to fetch new credentials\n` +
@@ -590,6 +591,20 @@ app.post("/api/event", async (req, res) => {
         `✅ New WiFi credentials loaded on ${dev}\n` +
         `📶 WiFi1: ${wifi1 || "?"}\n` +
         `📶 WiFi2: ${wifi2 || "?"}\n` +
+        `🕒 ${formatTime(now)}`;
+      for (const bot of BOTS)
+        if (bot.deviceNorm === dev)
+          await broadcast(bot.token, msg);
+    }
+
+    if (event === "WIFI_CFG_FAIL") {
+      const { reason } = req.body;
+      const hint = reason === "no_config"
+        ? "Run /setwifi to set credentials first"
+        : `HTTP error: ${reason}`;
+      const msg =
+        `⚠️ WiFi config fetch failed on ${dev}\n` +
+        `${hint}\n` +
         `🕒 ${formatTime(now)}`;
       for (const bot of BOTS)
         if (bot.deviceNorm === dev)
@@ -618,11 +633,8 @@ app.get("/api/fw/:device", async (req, res) => {
       [dev]
     );
 
-    // Send reset_config flag if set, then clear it immediately
+    // Send reset_config flag if set — do NOT clear here, only clear on WIFI_RESET confirmation
     const resetConfig = row?.reset_config === 1;
-    if (resetConfig) {
-      await dbRun(`UPDATE firmware_control SET reset_config=0 WHERE device=?`, [dev]);
-    }
 
     if (!row || row.update_requested !== 1 || !row.latest_version || !row.firmware_url) {
       return res.json({ update: false, reset_config: resetConfig });

@@ -98,6 +98,7 @@ unsigned long wifiRetryInterval = WIFI_RETRY_MS; // grows on failure, resets on 
 unsigned long lastDebounce=0, candidateSince=0, onStart=0;
 unsigned long lastWiFiAttempt=0, lastHeartbeat=0;
 unsigned long lastNetCheck=0, internetStableSince=0;
+bool firstNetCheck=true; // skip 60s wait on first internet check after boot
 unsigned long pendingDaySince=0, pendingMonthSince=0;
 
 unsigned long dayOnMs=0, monthOnMs=0;
@@ -178,10 +179,19 @@ void connectWiFi(){
   Serial.println("s");
 }
 
-bool checkInternetOnce(){ if(WiFi.status()!=WL_CONNECTED) return false; HTTPClient h; h.setTimeout(NET_HTTP_TIMEOUT_MS); h.begin("http://1.1.1.1"); int c=h.GET(); h.end(); return c==200||c==204||c==301||c==302; }
+bool checkInternetOnce(){
+  if(WiFi.status()!=WL_CONNECTED) return false;
+  // Use hostname-based check so DNS failure correctly marks internet as down
+  IPAddress ip;
+  if(!WiFi.hostByName("connectivitycheck.gstatic.com", ip)) return false;
+  HTTPClient h; h.setTimeout(NET_HTTP_TIMEOUT_MS);
+  h.begin("http://connectivitycheck.gstatic.com/generate_204");
+  int c=h.GET(); h.end(); return c==204;
+}
 
 void updateInternetHealth(){
-  if(millis()-lastNetCheck<NET_CHECK_MS) return;
+  if(!firstNetCheck && millis()-lastNetCheck<NET_CHECK_MS) return;
+  firstNetCheck=false;
   lastNetCheck=millis();
   bool ok=checkInternetOnce();
   if(ok){
@@ -406,10 +416,19 @@ bool fetchConfig(){
   String url = String(SERVER_BASE_URL) + "/api/config/" DEVICE_NAME;
   if(!h.begin(c,url)) return false;
   int code = h.GET();
-  if(code!=200){ h.end(); Serial.println("[CFG] Config fetch failed code="+String(code)); return false; }
+  if(code!=200){
+    h.end();
+    Serial.println("[CFG] Config fetch failed code="+String(code));
+    postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"http_"+String(code)+"\"}");
+    return false;
+  }
   String body = h.getString(); h.end();
   Serial.println("[CFG] Config response: "+body);
-  if(body.indexOf("\"ok\":true")<0) return false;
+  if(body.indexOf("\"ok\":true")<0){
+    Serial.println("[CFG] Server returned ok:false — /setwifi may not have been run");
+    postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"no_config\"}");
+    return false;
+  }
 
   auto getField=[&](const String& key)->String{
     int idx=body.indexOf(key); if(idx<0) return String();
