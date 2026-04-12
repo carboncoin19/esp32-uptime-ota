@@ -23,7 +23,9 @@
       "Bash(powershell.exe -Command \"& 'C:\\\\Users\\\\owner\\\\.platformio\\\\penv\\\\Scripts\\\\python.exe' 'C:\\\\Users\\\\owner\\\\.platformio\\\\packages\\\\tool-esptoolpy\\\\esptool.py' --port COM11 chip_id 2>&1\")",
       "Bash(cmd.exe /c \"git config --global user.name & git config --global user.email\")",
       "Bash(git config:*)",
-      "Bash(curl -s https://api.github.com/repos/carboncoin19/esp32-uptime-ota/releases/latest)"
+      "Bash(curl -s https://api.github.com/repos/carboncoin19/esp32-uptime-ota/releases/latest)",
+      "Bash(pio boards:*)",
+      "Bash(~/.platformio/penv/Scripts/pio.exe boards:*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\owner\\.claude\\projects\\c--Users-owner-Documents-PlatformIO-Projects-esp-32"

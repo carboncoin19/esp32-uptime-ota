@@ -19,7 +19,7 @@
 
 /* ===================== DEVICE INFO ===================== */
 #ifndef DEVICE_NAME
-#define DEVICE_NAME "NDONI-UPTIME"   // override via platformio.ini build_flags
+#define DEVICE_NAME "Akabuga_uptime_bot"   // override via platformio.ini build_flags
 #endif
 #define FW_VERSION  "1.0.8"
 
@@ -45,9 +45,9 @@
 #define OTA_TIMEOUT   60000UL
 
 /* ===================== WIFI ===================== */
-#define WIFI1_SSID     "akabuga"
+#define WIFI1_SSID     "mifi"
 #define WIFI1_PASSWORD "12345678"
-#define WIFI2_SSID     "mifi"
+#define WIFI2_SSID     "Star Home"
 #define WIFI2_PASSWORD "12345678"
 #define WIFI_RETURN_STABLE_MS 60000UL
 #define OTA_CHECK_INTERVAL 60000UL
@@ -55,9 +55,9 @@
 /* ===================== NETWORK ===================== */
 #define SERVER_BASE_URL "https://uptime-bot-production-9a37.up.railway.app"
 #define SERVER_URL      SERVER_BASE_URL "/api/event"
-#define NET_CHECK_MS        15000UL
-#define NET_FAIL_THRESHOLD  3
-#define NET_HTTP_TIMEOUT_MS 2500
+#define NET_CHECK_MS        60000UL  // check every 60s (was 30s) — slow 3G
+#define NET_FAIL_THRESHOLD  6        // 6 consecutive fails before switching (was 5)
+#define NET_HTTP_TIMEOUT_MS 20000    // 20s timeout (was 8s) — allow for 3G latency
 
 /* ===================== TIME ===================== */
 #define GMT_OFFSET_SEC   3600
@@ -147,11 +147,61 @@ void connectWiFi(){
   Serial.print("[WiFi] Connecting to ");
   Serial.println(ssid);
 
+  // --- DEEP DEBUG: scan before connect ---
+  Serial.println("[WiFi][SCAN] Scanning networks (including hidden)...");
+  int scanCount = WiFi.scanNetworks(false, true); // blocking=true, show_hidden=true
+  bool targetFound = false;
+  if (scanCount == 0) {
+    Serial.println("[WiFi][SCAN] No networks found");
+  } else {
+    for (int i = 0; i < scanCount; i++) {
+      String foundSSID = WiFi.SSID(i);
+      int32_t rssi     = WiFi.RSSI(i);
+      bool hidden      = (foundSSID.length() == 0);
+      Serial.printf("[WiFi][SCAN] %2d: \"%s\" %d dBm enc=%d%s\n",
+        i, hidden ? "<hidden>" : foundSSID.c_str(), rssi,
+        WiFi.encryptionType(i), hidden ? " [hidden]" : "");
+      if (!hidden && foundSSID == String(ssid)) targetFound = true;
+    }
+  }
+  WiFi.scanDelete();
+
+  if (!targetFound) {
+    Serial.printf("[WiFi][SCAN] \"%s\" not found in scan — skipping connect\n", ssid);
+    wifiPhase = (wifiPhase + 1) % 2;
+    wifiRetryInterval = min(wifiRetryInterval * 2, WIFI_RETRY_MAX_MS);
+    Serial.print("[WiFi] Next retry in ");
+    Serial.print(wifiRetryInterval / 1000);
+    Serial.println("s");
+    return;
+  }
+  // --- END DEEP DEBUG SCAN ---
+
   WiFi.disconnect(false);
   delay(200);
 
   WiFi.begin(ssid, pass);
   activeWiFi = (wifiPhase == 0) ? 1 : 2;
+
+  // Wait up to 15s and log each status tick
+  unsigned long t = millis();
+  while (millis() - t < 15000) {
+    delay(500);
+    wl_status_t st = WiFi.status();
+    Serial.printf("[WiFi][WAIT] t=%lums status=%d\n", millis() - t, (int)st);
+    if (st == WL_CONNECTED) {
+      Serial.println("[WiFi] Connected! IP: " + WiFi.localIP().toString());
+      wifiRetryInterval = WIFI_RETRY_MS;
+      break;
+    }
+    if (st == WL_CONNECT_FAILED)  { Serial.println("[WiFi][ERR] CONNECT_FAILED — auth rejected (wrong password or MAC filtered)"); break; }
+    if (st == WL_NO_SSID_AVAIL)   { Serial.println("[WiFi][ERR] NO_SSID_AVAIL — disappeared after scan (hotspot auto-off?)"); break; }
+    if (st == WL_CONNECTION_LOST) { Serial.println("[WiFi][ERR] CONNECTION_LOST"); break; }
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.print("[WiFi][ERR] Failed, status=");
+    Serial.println(WiFi.status());
+  }
 
   // Next retry switches network
   wifiPhase = (wifiPhase + 1) % 2;
@@ -163,7 +213,7 @@ void connectWiFi(){
   Serial.println("s");
 }
 
-bool checkInternetOnce(){ if(WiFi.status()!=WL_CONNECTED) return false; HTTPClient h; h.setTimeout(NET_HTTP_TIMEOUT_MS); h.begin("http://clients3.google.com/generate_204"); int c=h.GET(); h.end(); return c==204||c==200; }
+bool checkInternetOnce(){ if(WiFi.status()!=WL_CONNECTED) return false; HTTPClient h; h.setTimeout(NET_HTTP_TIMEOUT_MS); h.begin("http://1.1.1.1"); int c=h.GET(); h.end(); return c==200||c==204||c==301||c==302; }
 
 void updateInternetHealth(){
   if(millis()-lastNetCheck<NET_CHECK_MS) return;
@@ -217,9 +267,10 @@ bool postJSON(const String&p){
 
   WiFiClientSecure client;
   client.setInsecure(); // Railway TLS
+  client.setTimeout(12000); // SSL handshake can take 3-4s on ESP32
 
   HTTPClient h;
-  h.setTimeout(3000);
+  h.setTimeout(12000);
   if(!h.begin(client, SERVER_URL)) return false;
   h.addHeader("Content-Type","application/json");
   int c=h.POST(p);
@@ -411,6 +462,8 @@ bool fetchConfig(){
   prefs.putString("w2s",cfgWifi2SSID); prefs.putString("w2p",cfgWifi2Pass);
   prefs.putBool("cfg_ok",true);
   Serial.println("[CFG] WiFi config saved to NVS: "+cfgWifi1SSID+"/"+cfgWifi2SSID);
+  postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_CFG_OK\","
+           "\"wifi1\":\""+cfgWifi1SSID+"\",\"wifi2\":\""+cfgWifi2SSID+"\"}");
   return true;
 }
 
@@ -463,6 +516,7 @@ void checkManualUpdate(){
   if(body.indexOf("\"reset_config\":true")>=0){
     Serial.println("[CFG] Server requested config reset — rebooting");
     clearNvsConfig();
+    postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_RESET\"}");
     delay(1000);
     ESP.restart();
   }
@@ -590,6 +644,7 @@ void loop() {
     lastOTACheck = millis();
     Serial.println("[OTA] Periodic OTA check");
     checkManualUpdate();
+    return; // yield — avoid opening a second SSL context in same loop pass
   }
 
   ensureTime();
@@ -601,13 +656,18 @@ void loop() {
       millis() - lastCfgFetchAttempt > 60000UL) {
     lastCfgFetchAttempt = millis();
     if (fetchConfig()) cfgFetched = true;
+    return; // yield — avoid SSL context overlap with other calls
   }
 
-  // ---- Delayed FW_REPORT (queue once when network is ready)
+  // ---- Delayed FW_REPORT + WIFI_CONNECTED (queue once when network is ready)
   if (!fwReportSent && WiFi.status() == WL_CONNECTED && internetOK) {
     Serial.println("[DIAG] Queuing FW_REPORT (delayed)");
     jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"FW_REPORT\",\"version\":\"" FW_VERSION "\",\"time\":\"" + timestamp() + "\"}";
     queueEvent(jsonBuf);
+    String connectedSSID = WiFi.SSID();
+    queueEvent("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_CONNECTED\","
+               "\"ssid\":\"" + connectedSSID + "\","
+               "\"ip\":\"" + WiFi.localIP().toString() + "\"}");
     fwReportSent = true;
   }
 

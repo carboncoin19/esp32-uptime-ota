@@ -518,6 +518,40 @@ app.post("/api/event", async (req, res) => {
           await broadcast(bot.token, msg);
     }
 
+    if (event === "WIFI_RESET") {
+      const msg =
+        `🔄 WiFi reset applied on ${dev}\n` +
+        `NVS cleared — rebooting to fetch new credentials\n` +
+        `🕒 ${formatTime(now)}`;
+      for (const bot of BOTS)
+        if (bot.deviceNorm === dev)
+          await broadcast(bot.token, msg);
+    }
+
+    if (event === "WIFI_CFG_OK") {
+      const { wifi1, wifi2 } = req.body;
+      const msg =
+        `✅ New WiFi credentials loaded on ${dev}\n` +
+        `📶 WiFi1: ${wifi1 || "?"}\n` +
+        `📶 WiFi2: ${wifi2 || "?"}\n` +
+        `🕒 ${formatTime(now)}`;
+      for (const bot of BOTS)
+        if (bot.deviceNorm === dev)
+          await broadcast(bot.token, msg);
+    }
+
+    if (event === "WIFI_CONNECTED") {
+      const { ssid, ip } = req.body;
+      const msg =
+        `📶 ${dev} connected to WiFi\n` +
+        `SSID: ${ssid || "?"}\n` +
+        `IP: ${ip || "?"}\n` +
+        `🕒 ${formatTime(now)}`;
+      for (const bot of BOTS)
+        if (bot.deviceNorm === dev)
+          await broadcast(bot.token, msg);
+    }
+
     res.json({ ok: true });
   } catch (e) {
     console.error("❌ /api/event error:", e.message);
