@@ -166,6 +166,15 @@ db.run(`
   )
 `);
 
+db.all(`PRAGMA table_info(devices)`, (err, cols) => {
+  if (err) return;
+  const hasCol = name => cols.some(c => c.name === name);
+  if (!hasCol("wifi_ssid"))
+    db.run(`ALTER TABLE devices ADD COLUMN wifi_ssid TEXT`);
+  if (!hasCol("wifi_ip"))
+    db.run(`ALTER TABLE devices ADD COLUMN wifi_ip TEXT`);
+});
+
 db.run(`
   CREATE TABLE IF NOT EXISTS daily_uptime (
     device TEXT,
@@ -411,14 +420,16 @@ app.post("/api/event", async (req, res) => {
   if (!event || !dev) return res.json({ ok: true });
 
   try {
-    // HEARTBEAT: still update last_seen so /status works
+    // HEARTBEAT: update last_seen and return OTA + reset_config status inline
+    // Device reads this response — eliminates a separate GET /api/fw round trip
     if (event === "HEARTBEAT") {
       const { ssid, ip } = req.body;
       await dbRun(
-        `INSERT INTO devices(device,last_seen,wifi_ssid,wifi_ip)
-         VALUES(?,?,?,?)
+        `INSERT INTO devices(device,last_seen,status,wifi_ssid,wifi_ip)
+         VALUES(?,?,'ONLINE',?,?)
          ON CONFLICT(device)
          DO UPDATE SET last_seen=excluded.last_seen,
+                       status='ONLINE',
                        wifi_ssid=COALESCE(excluded.wifi_ssid, devices.wifi_ssid),
                        wifi_ip=COALESCE(excluded.wifi_ip, devices.wifi_ip)`,
         [dev, now, ssid || null, ip || null]
@@ -429,7 +440,28 @@ app.post("/api/event", async (req, res) => {
          ON CONFLICT(device) DO NOTHING`,
         [dev]
       );
-      return res.json({ ok: true });
+
+      // Piggyback OTA + reset_config so device doesn't need a separate HTTPS round trip
+      const fwRow = await dbGet(
+        `SELECT latest_version, firmware_url, update_requested, force_update, reset_config
+         FROM firmware_control WHERE device=?`,
+        [dev]
+      );
+      const resetConfig = fwRow?.reset_config === 1;
+      if (resetConfig) {
+        await dbRun(`UPDATE firmware_control SET reset_config=0 WHERE device=?`, [dev]);
+      }
+      const hasUpdate = fwRow?.update_requested === 1 && fwRow?.latest_version && fwRow?.firmware_url;
+      return res.json({
+        ok: true,
+        reset_config: resetConfig,
+        update: hasUpdate ? true : false,
+        ...(hasUpdate && {
+          version: fwRow.latest_version,
+          url: fwRow.firmware_url,
+          force: fwRow.force_update === 1,
+        }),
+      });
     }
 
     const status =
@@ -466,7 +498,8 @@ app.post("/api/event", async (req, res) => {
           await broadcast(bot.token, msg);
     }
 
-    if (event === "FW_REPORT") {
+    if (event === "FW_REPORT" || event === "BOOT_REPORT") {
+      const { ssid, ip } = req.body;
       await dbRun(
         `INSERT INTO firmware_control(device, current_version)
          VALUES(?,?)
@@ -484,7 +517,27 @@ app.post("/api/event", async (req, res) => {
           `UPDATE firmware_control SET update_requested=0, force_update=0 WHERE device=?`,
           [dev]
         );
-        console.log(`[FW_REPORT] Auto-cleared stuck update_requested for ${dev} (version match: ${version})`);
+        console.log(`[BOOT_REPORT] Auto-cleared stuck update_requested for ${dev}`);
+      }
+      // BOOT_REPORT also carries WiFi info — send connected notification
+      if (event === "BOOT_REPORT" && ssid) {
+        await dbRun(
+          `INSERT INTO devices(device,last_seen,wifi_ssid,wifi_ip)
+           VALUES(?,?,?,?)
+           ON CONFLICT(device)
+           DO UPDATE SET last_seen=excluded.last_seen,
+                         wifi_ssid=excluded.wifi_ssid,
+                         wifi_ip=excluded.wifi_ip`,
+          [dev, now, ssid, ip || null]
+        );
+        const msg =
+          `📶 ${dev} booted\n` +
+          `FW: ${version || "?"} | SSID: ${ssid}\n` +
+          `IP: ${ip || "?"}\n` +
+          `🕒 ${formatTime(now)}`;
+        for (const bot of BOTS)
+          if (bot.deviceNorm === dev)
+            await broadcast(bot.token, msg);
       }
     }
 
@@ -537,18 +590,6 @@ app.post("/api/event", async (req, res) => {
         `✅ New WiFi credentials loaded on ${dev}\n` +
         `📶 WiFi1: ${wifi1 || "?"}\n` +
         `📶 WiFi2: ${wifi2 || "?"}\n` +
-        `🕒 ${formatTime(now)}`;
-      for (const bot of BOTS)
-        if (bot.deviceNorm === dev)
-          await broadcast(bot.token, msg);
-    }
-
-    if (event === "WIFI_CONNECTED") {
-      const { ssid, ip } = req.body;
-      const msg =
-        `📶 ${dev} connected to WiFi\n` +
-        `SSID: ${ssid || "?"}\n` +
-        `IP: ${ip || "?"}\n` +
         `🕒 ${formatTime(now)}`;
       for (const bot of BOTS)
         if (bot.deviceNorm === dev)
@@ -726,17 +767,24 @@ async function handleUpdate(bot, update) {
 
   else if (cmd.startsWith("/setwifi")) {
     try {
-      // Split on first 4 spaces only — allows spaces inside passwords
-      const match = cmd.match(/^\/setwifi\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
-      if (!match) {
+      // Parse: /setwifi <ssid1> <pass1> <ssid2> <pass2>
+      // pass1, ssid2, pass2 are single tokens (no spaces).
+      // ssid1 may contain spaces — everything between /setwifi and the last 3 tokens.
+      const tokens = cmd.trim().split(/\s+/);
+      // tokens[0] = "/setwifi", need at least 5 tokens total
+      if (tokens.length < 5) {
         await tg(bot.token, chat,
           "❌ Usage: /setwifi <ssid1> <pass1> <ssid2> <pass2>\n" +
-          "Note: SSIDs and passwords must not contain spaces\n" +
-          "Example: /setwifi ndoni 12345678 STARLINK mypassword"
+          "pass1, ssid2, pass2 must not contain spaces\n" +
+          "ssid1 may contain spaces (e.g. Star Home)\n" +
+          "Example: /setwifi Star Home 12345678 mifi 12345678"
         );
         return;
       }
-      const [, ssid1, pass1, ssid2, pass2] = match;
+      const pass2 = tokens[tokens.length - 1];
+      const ssid2 = tokens[tokens.length - 2];
+      const pass1 = tokens[tokens.length - 3];
+      const ssid1 = tokens.slice(1, tokens.length - 3).join(" ");
       await dbRun(
         `INSERT INTO device_config(device,wifi1_ssid,wifi1_pass,wifi2_ssid,wifi2_pass)
          VALUES(?,?,?,?,?)

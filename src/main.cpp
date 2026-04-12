@@ -21,7 +21,7 @@
 #ifndef DEVICE_NAME
 #define DEVICE_NAME "Akabuga_uptime_bot"   // override via platformio.ini build_flags
 #endif
-#define FW_VERSION  "1.0.8"
+#define FW_VERSION  "1.0.9"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -50,7 +50,6 @@
 #define WIFI2_SSID     "Star Home"
 #define WIFI2_PASSWORD "12345678"
 #define WIFI_RETURN_STABLE_MS 60000UL
-#define OTA_CHECK_INTERVAL 60000UL
 
 /* ===================== NETWORK ===================== */
 #define SERVER_BASE_URL "https://uptime-bot-production-9a37.up.railway.app"
@@ -88,7 +87,6 @@ volatile bool setupDone=false;        // guards ISR from firing before setup is 
 bool preferWifi1Pending=false;
 bool wifi1NoInternet=false; // set when WiFi1 connects but fails internet — cleared after 10min on STARLINK
 bool pendingDailySync=false, pendingMonthlySync=false;
-unsigned long lastOTACheck=0;
 bool fwReportSent=false; // send FW_REPORT only after network is ready
 
 uint8_t activeWiFi=0;
@@ -147,66 +145,33 @@ void connectWiFi(){
   Serial.print("[WiFi] Connecting to ");
   Serial.println(ssid);
 
-  // --- DEEP DEBUG: scan before connect ---
-  Serial.println("[WiFi][SCAN] Scanning networks (including hidden)...");
-  int scanCount = WiFi.scanNetworks(false, true); // blocking=true, show_hidden=true
-  bool targetFound = false;
-  if (scanCount == 0) {
-    Serial.println("[WiFi][SCAN] No networks found");
-  } else {
-    for (int i = 0; i < scanCount; i++) {
-      String foundSSID = WiFi.SSID(i);
-      int32_t rssi     = WiFi.RSSI(i);
-      bool hidden      = (foundSSID.length() == 0);
-      Serial.printf("[WiFi][SCAN] %2d: \"%s\" %d dBm enc=%d%s\n",
-        i, hidden ? "<hidden>" : foundSSID.c_str(), rssi,
-        WiFi.encryptionType(i), hidden ? " [hidden]" : "");
-      if (!hidden && foundSSID == String(ssid)) targetFound = true;
-    }
-  }
-  WiFi.scanDelete();
-
-  if (!targetFound) {
-    Serial.printf("[WiFi][SCAN] \"%s\" not found in scan — skipping connect\n", ssid);
-    wifiPhase = (wifiPhase + 1) % 2;
-    wifiRetryInterval = min(wifiRetryInterval * 2, WIFI_RETRY_MAX_MS);
-    Serial.print("[WiFi] Next retry in ");
-    Serial.print(wifiRetryInterval / 1000);
-    Serial.println("s");
-    return;
-  }
-  // --- END DEEP DEBUG SCAN ---
-
   WiFi.disconnect(false);
   delay(200);
 
   WiFi.begin(ssid, pass);
   activeWiFi = (wifiPhase == 0) ? 1 : 2;
 
-  // Wait up to 15s and log each status tick
+  // Wait up to 15s for connection result
   unsigned long t = millis();
   while (millis() - t < 15000) {
     delay(500);
     wl_status_t st = WiFi.status();
-    Serial.printf("[WiFi][WAIT] t=%lums status=%d\n", millis() - t, (int)st);
     if (st == WL_CONNECTED) {
       Serial.println("[WiFi] Connected! IP: " + WiFi.localIP().toString());
       wifiRetryInterval = WIFI_RETRY_MS;
       break;
     }
-    if (st == WL_CONNECT_FAILED)  { Serial.println("[WiFi][ERR] CONNECT_FAILED — auth rejected (wrong password or MAC filtered)"); break; }
-    if (st == WL_NO_SSID_AVAIL)   { Serial.println("[WiFi][ERR] NO_SSID_AVAIL — disappeared after scan (hotspot auto-off?)"); break; }
+    if (st == WL_CONNECT_FAILED)  { Serial.println("[WiFi][ERR] CONNECT_FAILED (wrong password or MAC filtered)"); break; }
+    if (st == WL_NO_SSID_AVAIL)   { Serial.println("[WiFi][ERR] NO_SSID_AVAIL (network not found)"); break; }
     if (st == WL_CONNECTION_LOST) { Serial.println("[WiFi][ERR] CONNECTION_LOST"); break; }
   }
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.print("[WiFi][ERR] Failed, status=");
-    Serial.println(WiFi.status());
-  }
+  if (WiFi.status() == WL_CONNECTED) return; // success — keep wifiPhase, don't touch backoff
 
-  // Next retry switches network
+  Serial.print("[WiFi][ERR] Failed, status=");
+  Serial.println(WiFi.status());
+
+  // Failed — switch to other network on next attempt and double backoff
   wifiPhase = (wifiPhase + 1) % 2;
-
-  // Double interval AFTER attempt — so first retry is always 10s, not 20s
   wifiRetryInterval = min(wifiRetryInterval * 2, WIFI_RETRY_MAX_MS);
   Serial.print("[WiFi] Next retry in ");
   Serial.print(wifiRetryInterval / 1000);
@@ -262,25 +227,28 @@ void updateInternetHealth(){
 }
 
 /* ===================== HTTP ===================== */
-bool postJSON(const String&p){
-  if(WiFi.status()!=WL_CONNECTED || !internetOK) return false;
-
+// Posts JSON and returns response body (empty string on failure)
+String postJSONResponse(const String& p){
+  if(WiFi.status()!=WL_CONNECTED || !internetOK) return "";
   WiFiClientSecure client;
-  client.setInsecure(); // Railway TLS
-  client.setTimeout(12000); // SSL handshake can take 3-4s on ESP32
-
+  client.setInsecure();
+  client.setTimeout(12000);
   HTTPClient h;
   h.setTimeout(12000);
-  if(!h.begin(client, SERVER_URL)) return false;
+  if(!h.begin(client, SERVER_URL)) return "";
   h.addHeader("Content-Type","application/json");
-  int c=h.POST(p);
+  int c = h.POST(p);
+  if(c != 200){ h.end(); return ""; }
+  String body = h.getString();
   h.end();
-  return c==200;
+  return body;
 }
+
+bool postJSON(const String& p){ return postJSONResponse(p).length() > 0; }
 
 /* ===================== QUEUE ===================== */
 void queueEvent(const String&p){ if(eventQueue.size() >= 100) eventQueue.pop_front(); eventQueue.push_back(p); }
-void processQueue(){ static unsigned long last=0; if(otaInProgress||eventQueue.empty()||WiFi.status()!=WL_CONNECTED||!internetOK||millis()-last<1000) return; if(postJSON(eventQueue.front())) eventQueue.pop_front(); last=millis(); }
+void processQueue(){ static unsigned long last=0; if(otaInProgress||eventQueue.empty()||WiFi.status()!=WL_CONNECTED||!internetOK||millis()-last<5000) return; if(postJSON(eventQueue.front())) eventQueue.pop_front(); last=millis(); }
 
 /* ===================== SYNC ===================== */
 bool trySyncDaily(uint32_t d, unsigned long u) {
@@ -433,7 +401,7 @@ void clearNvsConfig(){
 
 bool fetchConfig(){
   if(WiFi.status()!=WL_CONNECTED || !internetOK) return false;
-  WiFiClientSecure c; c.setInsecure(); c.setTimeout(10000);
+  WiFiClientSecure c; c.setInsecure(); c.setTimeout(12000);
   HTTPClient h; h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   String url = String(SERVER_BASE_URL) + "/api/config/" DEVICE_NAME;
   if(!h.begin(c,url)) return false;
@@ -467,18 +435,48 @@ bool fetchConfig(){
   return true;
 }
 
+// Shared: parse a JSON string field value from a flat JSON body
+String parseField(const String& body, const String& key){
+  int idx = body.indexOf(key);
+  if(idx < 0) return String();
+  int q1 = body.indexOf('"', idx + key.length());
+  if(q1 < 0) return String();
+  int q2 = body.indexOf('"', q1 + 1);
+  if(q2 < 0) return String();
+  return body.substring(q1 + 1, q2);
+}
+
+// Process a JSON body that may contain OTA or reset_config instructions.
+// Used by both heartbeat response and the fallback OTA check poll.
+void handleServerResponse(const String& body){
+  if(body.length() == 0) return;
+  if(body.indexOf("\"reset_config\":true") >= 0){
+    Serial.println("[CFG] Server requested config reset — rebooting");
+    clearNvsConfig();
+    postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_RESET\"}");
+    delay(1000);
+    ESP.restart();
+  }
+  if(body.indexOf("\"update\":true") < 0) return;
+  String nv = parseField(body, "\"version\"");
+  String fu = parseField(body, "\"url\"");
+  if(nv.length() == 0 || fu.length() == 0){ Serial.println("[OTA][ERR] invalid firmware response"); return; }
+  bool force = body.indexOf("\"force\":true") >= 0;
+  if(!force && nv == FW_VERSION) return;
+  Serial.println("[OTA] Parsed firmware URL: " + fu);
+  performOTA(fu, nv);
+}
+
 void checkManualUpdate(){
   if(otaInProgress || WiFi.status()!=WL_CONNECTED || !internetOK) return;
-
-  HTTPClient h;
-  String url = String(SERVER_BASE_URL) + "/api/fw/" DEVICE_NAME;
 
   WiFiClientSecure c;
   c.setInsecure();
   c.setTimeout(15000);
 
+  HTTPClient h;
   h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if(!h.begin(c, url)) return;
+  if(!h.begin(c, String(SERVER_BASE_URL) + "/api/fw/" DEVICE_NAME)) return;
 
   int code = h.GET();
   if(code <= 0){
@@ -494,47 +492,11 @@ void checkManualUpdate(){
     }
     return;
   }
-
   netFailCountFW = 0;
   String body = h.getString();
   h.end();
-
-  // DEBUG: show raw firmware response
   Serial.println("[OTA] FW response: " + body);
-
-  auto parseStringField = [&](const String& key)->String {
-    int idx = body.indexOf(key);
-    if (idx < 0) return String();
-    int q1 = body.indexOf('"', idx + key.length());
-    if (q1 < 0) return String();
-    int q2 = body.indexOf('"', q1 + 1);
-    if (q2 < 0) return String();
-    return body.substring(q1 + 1, q2);
-  };
-
-  // Server requested config reset — clear NVS and reboot to re-fetch
-  if(body.indexOf("\"reset_config\":true")>=0){
-    Serial.println("[CFG] Server requested config reset — rebooting");
-    clearNvsConfig();
-    postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_RESET\"}");
-    delay(1000);
-    ESP.restart();
-  }
-
-  if (body.indexOf("\"update\":true") < 0) return;
-
-  String nv = parseStringField("\"version\"");
-  String fu = parseStringField("\"url\"");
-  if (nv.length() == 0 || fu.length() == 0) {
-    Serial.println("[OTA][ERR] invalid firmware response");
-    return;
-  }
-
-  bool force = body.indexOf("\"force\":true") >= 0;
-  if (!force && nv == FW_VERSION) return;
-
-  Serial.println("[OTA] Parsed firmware URL: " + fu);
-  performOTA(fu, nv);
+  handleServerResponse(body);
 }
 
 /* ===================== TRACK PIN ISR ===================== */
@@ -569,18 +531,9 @@ void setup() {
   pinMode(MIRROR_PIN, OUTPUT);
   attachInterrupt(digitalPinToInterrupt(TRACK_PIN), onPowerRestored, RISING);
 
-  connectWiFi();
-
-  configTime(
-    GMT_OFFSET_SEC,
-    DAYLIGHT_OFFSET,
-    "pool.ntp.org",
-    "time.nist.gov"
-  );
-
   prefs.begin("uptime", false);
 
-  // Load WiFi credentials from NVS if previously fetched from server
+  // Load WiFi credentials from NVS BEFORE first connectWiFi() call
   if(prefs.getBool("cfg_ok", false)){
     cfgWifi1SSID = prefs.getString("w1s", WIFI1_SSID);
     cfgWifi1Pass = prefs.getString("w1p", WIFI1_PASSWORD);
@@ -591,6 +544,15 @@ void setup() {
   } else {
     Serial.println("[CFG] No NVS config — using hardcoded defaults, will fetch from server");
   }
+
+  connectWiFi();
+
+  configTime(
+    GMT_OFFSET_SEC,
+    DAYLIGHT_OFFSET,
+    "pool.ntp.org",
+    "time.nist.gov"
+  );
 
   pendingDailySync = prefs.getBool("pendingDS", false);
   pendingDayEpoch = prefs.getUInt("pDay", todayEpoch());
@@ -639,14 +601,6 @@ void loop() {
     // preferWifi1Pending stays true — cleared only when WiFi1 confirms internet
   }
 
-  if (!otaInProgress && WiFi.status() == WL_CONNECTED && internetOK &&
-      millis() - lastOTACheck > OTA_CHECK_INTERVAL) {
-    lastOTACheck = millis();
-    Serial.println("[OTA] Periodic OTA check");
-    checkManualUpdate();
-    return; // yield — avoid opening a second SSL context in same loop pass
-  }
-
   ensureTime();
 
   // ---- Fetch WiFi config from server if NVS is empty (first boot after flash)
@@ -661,13 +615,14 @@ void loop() {
 
   // ---- Delayed FW_REPORT + WIFI_CONNECTED (queue once when network is ready)
   if (!fwReportSent && WiFi.status() == WL_CONNECTED && internetOK) {
-    Serial.println("[DIAG] Queuing FW_REPORT (delayed)");
-    jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"FW_REPORT\",\"version\":\"" FW_VERSION "\",\"time\":\"" + timestamp() + "\"}";
+    // Single POST carries both FW_REPORT and WIFI_CONNECTED — saves one SSL handshake on boot
+    Serial.println("[DIAG] Queuing BOOT_REPORT (FW + WiFi in one)");
+    jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"BOOT_REPORT\","
+              "\"version\":\"" FW_VERSION "\","
+              "\"ssid\":\"" + WiFi.SSID() + "\","
+              "\"ip\":\"" + WiFi.localIP().toString() + "\","
+              "\"time\":\"" + timestamp() + "\"}";
     queueEvent(jsonBuf);
-    String connectedSSID = WiFi.SSID();
-    queueEvent("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_CONNECTED\","
-               "\"ssid\":\"" + connectedSSID + "\","
-               "\"ip\":\"" + WiFi.localIP().toString() + "\"}");
     fwReportSent = true;
   }
 
@@ -678,7 +633,9 @@ void loop() {
     jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"HEARTBEAT\","
               "\"ssid\":\"" + WiFi.SSID() + "\","
               "\"ip\":\"" + WiFi.localIP().toString() + "\"}";
-    postJSON(jsonBuf);
+    String hbResp = postJSONResponse(jsonBuf);
+    // Piggyback: server returns OTA + reset_config in heartbeat reply — no extra SSL round trip
+    if (hbResp.length() > 0) handleServerResponse(hbResp);
   }
 
   bool raw = digitalRead(TRACK_PIN);
