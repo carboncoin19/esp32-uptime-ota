@@ -1,6 +1,6 @@
 name: Build & Release Firmware
 
-# Triggers when you push a tag like: v1.0.5
+# Triggers when you push a tag like: v1.0.13
 on:
   push:
     tags:
@@ -25,21 +25,33 @@ jobs:
       - name: Install PlatformIO
         run: pip install platformio
 
-      - name: Build ESP32 firmware (ndoni)
+      # Transition builds — DEFAULT_DEVICE_NAME baked in for remote OTA of existing devices
+      - name: Build NDONI transition firmware (ESP32)
         run: pio run -e ndoni
 
-      - name: Build ESP32-C3 firmware (akabuga)
-        run: pio run -e akabuga
+      - name: Build KAINJI transition firmware (ESP32)
+        run: pio run -e kainji
+
+      # Universal builds — device name set via USB serial on first boot
+      - name: Build universal ESP32 firmware
+        run: pio run -e esp32
+
+      - name: Build universal ESP32-C3 firmware
+        run: pio run -e esp32c3
 
       - name: Rename binaries
         run: |
-          cp .pio/build/ndoni/firmware.bin   firmware-esp32.bin
-          cp .pio/build/akabuga/firmware.bin firmware-esp32c3.bin
+          cp .pio/build/ndoni/firmware.bin   firmware-esp32-ndoni.bin
+          cp .pio/build/kainji/firmware.bin  firmware-esp32-kainji.bin
+          cp .pio/build/esp32/firmware.bin   firmware-esp32.bin
+          cp .pio/build/esp32c3/firmware.bin firmware-esp32c3.bin
 
       - name: Create GitHub Release and upload binaries
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            firmware-esp32-ndoni.bin
+            firmware-esp32-kainji.bin
             firmware-esp32.bin
             firmware-esp32c3.bin
           generate_release_notes: true

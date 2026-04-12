@@ -18,10 +18,10 @@
 
 
 /* ===================== DEVICE INFO ===================== */
-#ifndef DEVICE_NAME
-#define DEVICE_NAME "Akabuga_uptime_bot"   // override via platformio.ini build_flags
-#endif
-#define FW_VERSION  "1.0.9"
+// Device name is NOT compiled in — loaded from NVS on boot.
+// Set once via USB serial on first flash, persists across OTA updates.
+String deviceName;
+#define FW_VERSION  "1.0.12"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -91,7 +91,7 @@ bool fwReportSent=false; // send FW_REPORT only after network is ready
 
 uint8_t activeWiFi=0;
 uint8_t wifiPhase=0; // 0=WIFI1, 1=WIFI2 — exposed so preferWifi1 can reset it
-uint8_t netFailCount=0, netFailCountFW=0;
+uint8_t netFailCount=0;
 
 unsigned long wifiRetryInterval = WIFI_RETRY_MS; // grows on failure, resets on connect
 
@@ -263,23 +263,23 @@ void processQueue(){ static unsigned long last=0; if(otaInProgress||eventQueue.e
 /* ===================== SYNC ===================== */
 bool trySyncDaily(uint32_t d, unsigned long u) {
   if (!ntpReady || WiFi.status() != WL_CONNECTED || !internetOK) return false;
-  jsonBuf = String("{\"device\":\"") + DEVICE_NAME +
+  jsonBuf = String("{\"device\":\"") + deviceName +
             String("\",\"event\":\"DAILY_SYNC\",\"day\":") + String(d) +
             String(",\"uptime_ms\":") + String(u) + String("}");
   return postJSON(jsonBuf);
 }
 bool trySyncMonthly(uint32_t m, unsigned long u) {
   if (!ntpReady || WiFi.status() != WL_CONNECTED || !internetOK) return false;
-  jsonBuf = String("{\"device\":\"") + DEVICE_NAME +
+  jsonBuf = String("{\"device\":\"") + deviceName +
             String("\",\"event\":\"MONTHLY_SYNC\",\"month\":") + String(m) +
             String(",\"uptime_ms\":") + String(u) + String("}");
   return postJSON(jsonBuf);
 }
 
 /* ===================== OTA ===================== */
-void reportOTA(String s,String v){ postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"OTA_"+s+"\",\"version\":\""+v+"\"}"); }
+void reportOTA(String s,String v){ postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"OTA_"+s+"\",\"version\":\""+v+"\"}"); }
 
-void finalizeUptimeBeforeOTA(){ if(!confirmed) return; unsigned long n=millis(); unsigned long s=n-onStart; dayOnMs+=s; monthOnMs+=s; prefs.putULong("dayOn",dayOnMs); prefs.putULong("monthOn",monthOnMs); confirmed=false; MIRROR_WRITE(LOW); queueEvent("{\"device\":\"" DEVICE_NAME "\",\"event\":\"OFFLINE\",\"time\":\""+timestamp()+"\"}"); processQueue(); }
+void finalizeUptimeBeforeOTA(){ if(!confirmed) return; unsigned long n=millis(); unsigned long s=n-onStart; dayOnMs+=s; monthOnMs+=s; prefs.putULong("dayOn",dayOnMs); prefs.putULong("monthOn",monthOnMs); confirmed=false; MIRROR_WRITE(LOW); queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"OFFLINE\",\"time\":\""+timestamp()+"\"}"); processQueue(); }
 
 void performOTA(String url, String ver){
   Serial.println("[OTA] ===== OTA START =====");
@@ -413,20 +413,20 @@ bool fetchConfig(){
   if(WiFi.status()!=WL_CONNECTED || !internetOK) return false;
   WiFiClientSecure c; c.setInsecure(); c.setTimeout(12000);
   HTTPClient h; h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  String url = String(SERVER_BASE_URL) + "/api/config/" DEVICE_NAME;
+  String url = String(SERVER_BASE_URL) + "/api/config/" + deviceName;
   if(!h.begin(c,url)) return false;
   int code = h.GET();
   if(code!=200){
     h.end();
     Serial.println("[CFG] Config fetch failed code="+String(code));
-    postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"http_"+String(code)+"\"}");
+    postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"http_"+String(code)+"\"}");
     return false;
   }
   String body = h.getString(); h.end();
   Serial.println("[CFG] Config response: "+body);
   if(body.indexOf("\"ok\":true")<0){
     Serial.println("[CFG] Server returned ok:false — /setwifi may not have been run");
-    postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"no_config\"}");
+    postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"no_config\"}");
     return false;
   }
 
@@ -449,7 +449,7 @@ bool fetchConfig(){
   prefs.putString("w2s",cfgWifi2SSID); prefs.putString("w2p",cfgWifi2Pass);
   prefs.putBool("cfg_ok",true);
   Serial.println("[CFG] WiFi config saved to NVS: "+cfgWifi1SSID+"/"+cfgWifi2SSID);
-  postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_CFG_OK\","
+  postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_OK\","
            "\"wifi1\":\""+cfgWifi1SSID+"\",\"wifi2\":\""+cfgWifi2SSID+"\"}");
   return true;
 }
@@ -472,7 +472,7 @@ void handleServerResponse(const String& body){
   if(body.indexOf("\"reset_config\":true") >= 0){
     Serial.println("[CFG] Server requested config reset — rebooting");
     clearNvsConfig();
-    postJSON("{\"device\":\"" DEVICE_NAME "\",\"event\":\"WIFI_RESET\"}");
+    postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_RESET\"}");
     delay(1000);
     ESP.restart();
   }
@@ -484,38 +484,6 @@ void handleServerResponse(const String& body){
   if(!force && nv == FW_VERSION) return;
   Serial.println("[OTA] Parsed firmware URL: " + fu);
   performOTA(fu, nv);
-}
-
-void checkManualUpdate(){
-  if(otaInProgress || WiFi.status()!=WL_CONNECTED || !internetOK) return;
-
-  WiFiClientSecure c;
-  c.setInsecure();
-  c.setTimeout(15000);
-
-  HTTPClient h;
-  h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if(!h.begin(c, String(SERVER_BASE_URL) + "/api/fw/" DEVICE_NAME)) return;
-
-  int code = h.GET();
-  if(code <= 0){
-    netFailCountFW++;
-    h.end();
-    if(netFailCountFW >= 3){
-      WiFi.disconnect(false);
-      netFailCountFW = 0;
-      internetOK = false;
-      internetStableSince = 0;
-      wifiRetryInterval = WIFI_RETRY_MS;
-      lastWiFiAttempt = 0;
-    }
-    return;
-  }
-  netFailCountFW = 0;
-  String body = h.getString();
-  h.end();
-  Serial.println("[OTA] FW response: " + body);
-  handleServerResponse(body);
 }
 
 /* ===================== TRACK PIN ISR ===================== */
@@ -544,7 +512,7 @@ void setup() {
   if (esp_ota_get_state_partition(r, &s) == ESP_OK &&
       s == ESP_OTA_IMG_PENDING_VERIFY) {
     esp_ota_mark_app_valid_cancel_rollback();
-    queueEvent("{\"device\":\"" DEVICE_NAME "\",\"event\":\"OTA_SUCCESS\",\"version\":\"" FW_VERSION "\"}");
+    queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"OTA_SUCCESS\",\"version\":\"" FW_VERSION "\"}");
   }
 
   pinMode(TRACK_PIN, INPUT_PULLDOWN);
@@ -552,6 +520,40 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(TRACK_PIN), onPowerRestored, RISING);
 
   prefs.begin("uptime", false);
+
+  // Load device name from NVS — set once, persists across OTA updates
+  deviceName = prefs.getString("dev_name", "");
+  if (deviceName.isEmpty()) {
+#ifdef DEFAULT_DEVICE_NAME
+    // Transition path: name compiled in for remote OTA of existing deployed devices.
+    // Saves to NVS so future OTAs are universal (no build flag needed).
+    deviceName = DEFAULT_DEVICE_NAME;
+    prefs.putString("dev_name", deviceName);
+    Serial.println("[CFG] Device name set from build default: " + deviceName);
+#else
+    // New device path: block on serial until name is entered via USB.
+    Serial.println("\n=== DEVICE NOT CONFIGURED ===");
+    Serial.println("Type device name and press Enter.");
+    Serial.println("Must match TG_BOT_DEVICE_N on Railway (e.g. NDONI-UPTIME):");
+    while (true) {
+      if (Serial.available()) {
+        String input = Serial.readStringUntil('\n');
+        input.trim();
+        if (input.length() > 0 && input.length() <= 32) {
+          deviceName = input;
+          prefs.putString("dev_name", deviceName);
+          Serial.println("Saved: " + deviceName + " — rebooting...");
+          delay(500);
+          ESP.restart();
+        } else {
+          Serial.println("Invalid name (1-32 chars). Try again:");
+        }
+      }
+      delay(50);
+    }
+#endif
+  }
+  Serial.println("[CFG] Device name: " + deviceName);
 
   // Load WiFi credentials from NVS BEFORE first connectWiFi() call
   if(prefs.getBool("cfg_ok", false)){
@@ -637,7 +639,7 @@ void loop() {
   if (!fwReportSent && WiFi.status() == WL_CONNECTED && internetOK) {
     // Single POST carries both FW_REPORT and WIFI_CONNECTED — saves one SSL handshake on boot
     Serial.println("[DIAG] Queuing BOOT_REPORT (FW + WiFi in one)");
-    jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"BOOT_REPORT\","
+    jsonBuf = "{\"device\":\"" + deviceName + "\",\"event\":\"BOOT_REPORT\","
               "\"version\":\"" FW_VERSION "\","
               "\"ssid\":\"" + WiFi.SSID() + "\","
               "\"ip\":\"" + WiFi.localIP().toString() + "\","
@@ -650,7 +652,7 @@ void loop() {
       millis() - lastHeartbeat > HEARTBEAT_MS) {
     lastHeartbeat = millis();
     Serial.println("[DIAG] Sending HEARTBEAT");
-    jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"HEARTBEAT\","
+    jsonBuf = "{\"device\":\"" + deviceName + "\",\"event\":\"HEARTBEAT\","
               "\"ssid\":\"" + WiFi.SSID() + "\","
               "\"ip\":\"" + WiFi.localIP().toString() + "\"}";
     String hbResp = postJSONResponse(jsonBuf);
@@ -678,7 +680,7 @@ void loop() {
 
       if (confirmed) {
         onStart = now;
-        jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"ONLINE\",\"time\":\"" + timestamp() + "\"}";
+        jsonBuf = "{\"device\":\"" + deviceName + "\",\"event\":\"ONLINE\",\"time\":\"" + timestamp() + "\"}";
         queueEvent(jsonBuf);
       } else {
         unsigned long sess = now - onStart;
@@ -686,7 +688,7 @@ void loop() {
         monthOnMs += sess;
         prefs.putULong("dayOn", dayOnMs);
         prefs.putULong("monthOn", monthOnMs);
-        jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"OFFLINE\",\"time\":\"" + timestamp() + "\"}";
+        jsonBuf = "{\"device\":\"" + deviceName + "\",\"event\":\"OFFLINE\",\"time\":\"" + timestamp() + "\"}";
         queueEvent(jsonBuf);
       }
     }

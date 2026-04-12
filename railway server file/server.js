@@ -173,6 +173,8 @@ db.all(`PRAGMA table_info(devices)`, (err, cols) => {
     db.run(`ALTER TABLE devices ADD COLUMN wifi_ssid TEXT`);
   if (!hasCol("wifi_ip"))
     db.run(`ALTER TABLE devices ADD COLUMN wifi_ip TEXT`);
+  if (!hasCol("last_broadcast"))
+    db.run(`ALTER TABLE devices ADD COLUMN last_broadcast TEXT`);
 });
 
 db.run(`
@@ -699,15 +701,20 @@ async function handleUpdate(bot, update) {
   else if (cmd === "/update" || cmd.startsWith("/update ")) {
     console.log("TG /update received:", bot.deviceNorm, cmd);
     try {
-      const parts = cmd.split(" ");
+      const parts = cmd.trim().split(/\s+/);
       const newVersion = parts[1]?.trim();
+      const customUrl = parts[2]?.trim() || null;
 
       if (!newVersion) {
         await tg(bot.token, chat,
-          "❌ Invalid version.\nUsage: /update 1.0.5"
+          "❌ Invalid version.\n" +
+          "Usage: /update 1.0.13\n" +
+          "With custom URL: /update 1.0.13 https://..."
         );
         return;
       }
+
+      const fwUrl = customUrl || bot.fwUrl;
 
       await dbRun(
         `INSERT INTO firmware_control
@@ -719,7 +726,7 @@ async function handleUpdate(bot, update) {
            firmware_url=excluded.firmware_url,
            update_requested=1,
            force_update=0`,
-        [bot.deviceNorm, newVersion, bot.fwUrl, 1, 0]
+        [bot.deviceNorm, newVersion, fwUrl, 1, 0]
       );
 
       await tg(
@@ -728,7 +735,8 @@ async function handleUpdate(bot, update) {
         "🚀 Update requested\n" +
         "📟 " + bot.device + "\n" +
         "🆕 " + newVersion + "\n" +
-        "🔧 Board: " + bot.board
+        "🔧 Board: " + bot.board +
+        (customUrl ? "\n🔗 Custom URL" : "")
       );
     } catch (e) {
       console.error("/update error:", e);
@@ -739,15 +747,20 @@ async function handleUpdate(bot, update) {
 
   else if (cmd === "/forceupdate" || cmd.startsWith("/forceupdate ")) {
     try {
-      const parts = cmd.split(" ");
+      const parts = cmd.trim().split(/\s+/);
       const newVersion = parts[1]?.trim();
+      const customUrl = parts[2]?.trim() || null;
 
       if (!newVersion) {
         await tg(bot.token, chat,
-          "❌ Invalid version.\nUsage: /forceupdate 1.0.5"
+          "❌ Invalid version.\n" +
+          "Usage: /forceupdate 1.0.13\n" +
+          "With custom URL: /forceupdate 1.0.13 https://..."
         );
         return;
       }
+
+      const fwUrl = customUrl || bot.fwUrl;
 
       await dbRun(
         `INSERT INTO firmware_control
@@ -759,7 +772,7 @@ async function handleUpdate(bot, update) {
            firmware_url=excluded.firmware_url,
            update_requested=1,
            force_update=1`,
-        [bot.deviceNorm, newVersion, bot.fwUrl, 1, 1]
+        [bot.deviceNorm, newVersion, fwUrl, 1, 1]
       );
 
       await tg(
@@ -769,7 +782,8 @@ async function handleUpdate(bot, update) {
         "📟 " + bot.device + "\n" +
         "🆕 " + newVersion + "\n" +
         "🔧 Board: " + bot.board + "\n" +
-        "⚠️ Will flash even if version matches"
+        "⚠️ Will flash even if version matches" +
+        (customUrl ? "\n🔗 Custom URL" : "")
       );
     } catch (e) {
       console.error("/forceupdate error:", e);
@@ -830,6 +844,17 @@ async function handleUpdate(bot, update) {
 
   else if (cmd === "/resetwifi") {
     try {
+      const cfgRow = await dbGet(
+        `SELECT wifi1_ssid FROM device_config WHERE device=?`,
+        [bot.deviceNorm]
+      );
+      if (!cfgRow || !cfgRow.wifi1_ssid) {
+        await tg(bot.token, chat,
+          "⚠️ No WiFi credentials saved for " + bot.device + "\n" +
+          "Run /setwifi first, then /resetwifi"
+        );
+        return;
+      }
       await dbRun(
         `INSERT INTO firmware_control(device, reset_config)
          VALUES(?,1)
@@ -863,6 +888,33 @@ async function handleUpdate(bot, update) {
     } catch (e) {
       console.error("/stopupdate error:", e);
       await tg(bot.token, chat, "⚠️ Stop update failed, please try again");
+    }
+    return;
+  }
+
+  else if (cmd === "/viewwifi") {
+    try {
+      const row = await dbGet(
+        `SELECT wifi1_ssid, wifi1_pass, wifi2_ssid, wifi2_pass FROM device_config WHERE device=?`,
+        [bot.deviceNorm]
+      );
+      if (!row || !row.wifi1_ssid) {
+        await tg(bot.token, chat,
+          "📋 " + bot.device + " stored credentials\n" +
+          "No credentials saved — run /setwifi first"
+        );
+        return;
+      }
+      await tg(bot.token, chat,
+        "📋 " + bot.device + " stored credentials\n" +
+        "📶 WiFi1 SSID: " + row.wifi1_ssid + "\n" +
+        "🔑 WiFi1 Pass: " + row.wifi1_pass + "\n" +
+        "📶 WiFi2 SSID: " + (row.wifi2_ssid || "not set") + "\n" +
+        "🔑 WiFi2 Pass: " + (row.wifi2_pass || "not set")
+      );
+    } catch (e) {
+      console.error("/viewwifi error:", e);
+      await tg(bot.token, chat, "⚠️ Could not retrieve WiFi credentials");
     }
     return;
   }
@@ -1038,6 +1090,13 @@ async function handleUpdate(bot, update) {
       await tg(bot.token, chat, "⚠️ Monthly status temporarily unavailable");
     }
   }
+
+  else if (cmd.startsWith("/")) {
+    await tg(bot.token, chat,
+      "❓ Unknown command: " + cmd.split(" ")[0] + "\n" +
+      "Available: /status /statusweek /statusmonth /fw /wifi /viewwifi /setwifi /resetwifi /update /forceupdate /stopupdate"
+    );
+  }
 }
 
 /* ===================== TELEGRAM WEBHOOK ENDPOINT ===================== */
@@ -1082,8 +1141,6 @@ async function registerWebhook(bot, attempt = 1) {
 }
 
 /* ===================== DAILY SLA BROADCAST ===================== */
-const sent = {};
-
 setInterval(async () => {
   try {
     const now = new Date(Date.now() + TZ_OFFSET_MS);
@@ -1094,7 +1151,8 @@ setInterval(async () => {
     for (const bot of BOTS) {
       try {
         const yLabel = epochSecToLabel(todayEpochSec() - 86400);
-        if (sent[bot.device] === yLabel) continue;
+        const broadcastRow = await dbGet(`SELECT last_broadcast FROM devices WHERE device=?`, [bot.deviceNorm]);
+        if (broadcastRow?.last_broadcast === yLabel) continue;
 
         const rows = await dbAll(
           `SELECT day,uptime_ms FROM daily_uptime
@@ -1108,11 +1166,11 @@ setInterval(async () => {
             bot.token,
             `⚠️ No DAILY_SYNC received for ${yLabel}\n📟 ${bot.device}\nDevice may have been offline or disconnected all day.`
           );
-          sent[bot.device] = yLabel;
+          await dbRun(`UPDATE devices SET last_broadcast=? WHERE device=?`, [yLabel, bot.deviceNorm]);
           continue;
         }
 
-        const devRow = await dbGet(
+        const statusRow = await dbGet(
           `SELECT last_seen,status FROM devices WHERE device=?`,
           [bot.deviceNorm]
         );
@@ -1122,21 +1180,16 @@ setInterval(async () => {
           buildSlaMessage({
             title: "Yesterday SLA (24h)",
             device: bot.device,
-            status: computeLiveStatus(devRow),
+            status: computeLiveStatus(statusRow),
             label: yLabel,
             uptimeMs: match.uptime_ms,
           })
         );
 
-        sent[bot.device] = yLabel;
+        await dbRun(`UPDATE devices SET last_broadcast=? WHERE device=?`, [yLabel, bot.deviceNorm]);
       } catch (e) {
         console.error(`❌ SLA broadcast error for ${bot.device}:`, e.message);
       }
-    }
-
-    // clean up sent entries older than today to prevent unbounded growth
-    for (const key of Object.keys(sent)) {
-      if (sent[key] !== epochSecToLabel(todayEpochSec() - 86400)) delete sent[key];
     }
   } catch (e) {
     console.error("❌ SLA broadcast error:", e.message);
