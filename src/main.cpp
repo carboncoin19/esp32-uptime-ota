@@ -675,7 +675,9 @@ void loop() {
       millis() - lastHeartbeat > HEARTBEAT_MS) {
     lastHeartbeat = millis();
     Serial.println("[DIAG] Sending HEARTBEAT");
-    jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"HEARTBEAT\"}";
+    jsonBuf = "{\"device\":\"" DEVICE_NAME "\",\"event\":\"HEARTBEAT\","
+              "\"ssid\":\"" + WiFi.SSID() + "\","
+              "\"ip\":\"" + WiFi.localIP().toString() + "\"}";
     postJSON(jsonBuf);
   }
 

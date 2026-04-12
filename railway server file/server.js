@@ -413,12 +413,15 @@ app.post("/api/event", async (req, res) => {
   try {
     // HEARTBEAT: still update last_seen so /status works
     if (event === "HEARTBEAT") {
+      const { ssid, ip } = req.body;
       await dbRun(
-        `INSERT INTO devices(device,last_seen)
-         VALUES(?,?)
+        `INSERT INTO devices(device,last_seen,wifi_ssid,wifi_ip)
+         VALUES(?,?,?,?)
          ON CONFLICT(device)
-         DO UPDATE SET last_seen=excluded.last_seen`,
-        [dev, now]
+         DO UPDATE SET last_seen=excluded.last_seen,
+                       wifi_ssid=COALESCE(excluded.wifi_ssid, devices.wifi_ssid),
+                       wifi_ip=COALESCE(excluded.wifi_ip, devices.wifi_ip)`,
+        [dev, now, ssid || null, ip || null]
       );
       await dbRun(
         `INSERT INTO firmware_control(device)
@@ -790,6 +793,32 @@ async function handleUpdate(bot, update) {
     } catch (e) {
       console.error("/stopupdate error:", e);
       await tg(bot.token, chat, "⚠️ Stop update failed, please try again");
+    }
+    return;
+  }
+
+  else if (cmd === "/wifi") {
+    try {
+      const row = await dbGet(
+        `SELECT wifi_ssid, wifi_ip, last_seen FROM devices WHERE device=?`,
+        [bot.deviceNorm]
+      );
+      if (!row || !row.wifi_ssid) {
+        await tg(bot.token, chat, "📶 " + bot.device + "\nNo WiFi info yet — waiting for next heartbeat (~2 min)");
+        return;
+      }
+      const age = Math.round((Date.now() - row.last_seen) / 1000);
+      const ageStr = age < 120 ? `${age}s ago` : `${Math.round(age/60)}m ago`;
+      await tg(
+        bot.token, chat,
+        "📶 " + bot.device + " WiFi Status\n" +
+        "SSID: " + row.wifi_ssid + "\n" +
+        "IP: " + (row.wifi_ip || "unknown") + "\n" +
+        "Last seen: " + ageStr
+      );
+    } catch (e) {
+      console.error("/wifi error:", e);
+      await tg(bot.token, chat, "⚠️ WiFi info unavailable");
     }
     return;
   }
