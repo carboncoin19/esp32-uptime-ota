@@ -45,10 +45,19 @@ String deviceName;
 #define OTA_TIMEOUT   60000UL
 
 /* ===================== WIFI ===================== */
-#define WIFI1_SSID     "ndoni"
+// Defaults used by universal firmware — override per env via platformio.ini build_flags
+#ifndef WIFI1_SSID
+#define WIFI1_SSID     "Mifi"
+#endif
+#ifndef WIFI1_PASSWORD
 #define WIFI1_PASSWORD "12345678"
+#endif
+#ifndef WIFI2_SSID
 #define WIFI2_SSID     "STARLINK"
+#endif
+#ifndef WIFI2_PASSWORD
 #define WIFI2_PASSWORD "TrojanDelta"
+#endif
 #define WIFI_RETURN_STABLE_MS 60000UL
 
 /* ===================== NETWORK ===================== */
