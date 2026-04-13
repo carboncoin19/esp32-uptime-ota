@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.15"
+#define FW_VERSION  "1.0.17"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -347,7 +347,14 @@ void performOTA(String url, String ver){
   }
 
   WiFiClient* s = h.getStreamPtr();
-  uint8_t buf[4096];
+  uint8_t* buf = (uint8_t*)malloc(4096);
+  if (!buf) {
+    Serial.println("[OTA][ERR] malloc failed");
+    h.end();
+    reportOTA("FAILED", ver);
+    otaInProgress = false;
+    return;
+  }
   unsigned long lastData = millis();
   size_t totalWritten = 0;
 
@@ -358,6 +365,7 @@ void performOTA(String url, String ver){
       Serial.println("[OTA][ERR] OTA timeout");
       Update.abort();
       h.end();
+      free(buf);
       reportOTA("FAILED", ver);
       otaInProgress = false;
       return;
@@ -374,6 +382,7 @@ void performOTA(String url, String ver){
         Serial.println(w);
         Update.abort();
         h.end();
+        free(buf);
         reportOTA("FAILED", ver);
         otaInProgress = false;
         return;
@@ -394,6 +403,7 @@ void performOTA(String url, String ver){
   }
 
   h.end();
+  free(buf);
   Serial.println("[OTA] Stream ended, finishing update");
 
   if (!Update.end(true)) {
