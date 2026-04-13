@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.18"
+#define FW_VERSION  "1.0.19"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -92,6 +92,7 @@ bool lastStable=false, candidate=false, confirmed=false;
 bool internetOK=false, ntpReady=false;
 volatile bool otaInProgress=false;
 volatile bool powerRestoredISR=false; // set by TRACK_PIN interrupt, cleared in loop()
+volatile unsigned long lastISRFireMs=0; // ISR-level debounce timestamp
 volatile bool setupDone=false;        // guards ISR from firing before setup is complete
 bool preferWifi1Pending=false;
 bool wifi1NoInternet=false; // set when WiFi1 connects but fails internet — cleared after 10min on STARLINK
@@ -501,7 +502,11 @@ void handleServerResponse(const String& body){
 
 /* ===================== TRACK PIN ISR ===================== */
 void IRAM_ATTR onPowerRestored() {
-  powerRestoredISR = true; // signal loop() to reset WiFi backoff immediately
+  unsigned long now = millis();
+  if (now - lastISRFireMs > 1000) {   // 1s debounce inside ISR — ignores contact bounce
+    lastISRFireMs = now;
+    powerRestoredISR = true;
+  }
 }
 
 /* ===================== SETUP ===================== */
@@ -620,14 +625,9 @@ void loop() {
   // TRACK_PIN rising edge ISR fired — power restored, reset WiFi backoff immediately
   if (powerRestoredISR && setupDone) {
     powerRestoredISR = false;
-    static unsigned long lastISRHandle = 0;
-    unsigned long isrNow = millis();
-    if (isrNow - lastISRHandle > 300) {   // 300ms debounce — suppress contact bounce
-      lastISRHandle = isrNow;
-      wifiRetryInterval = WIFI_RETRY_MS;
-      lastWiFiAttempt = 0;
-      Serial.println("[ISR] Power restored on TRACK_PIN — WiFi backoff reset");
-    }
+    wifiRetryInterval = WIFI_RETRY_MS;
+    lastWiFiAttempt = 0;
+    Serial.println("[ISR] Power restored on TRACK_PIN — WiFi backoff reset");
   }
 
   connectWiFi();
