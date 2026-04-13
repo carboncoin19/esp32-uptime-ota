@@ -178,6 +178,11 @@ db.all(`PRAGMA table_info(devices)`, (err, cols) => {
       if (err) console.error("❌ devices migration error (last_broadcast):", err.message);
       else console.log("✅ devices: last_broadcast column added");
     });
+  if (!hasCol("site_status"))
+    db.run(`ALTER TABLE devices ADD COLUMN site_status INTEGER`, err => {
+      if (err) console.error("❌ devices migration error (site_status):", err.message);
+      else console.log("✅ devices: site_status column added");
+    });
 });
 
 db.run(`
@@ -273,18 +278,33 @@ const bar = p =>
   "█".repeat(Math.round((p / 100) * 10)) +
   "░".repeat(10 - Math.round((p / 100) * 10));
 
-function computeLiveStatus(d) {
-  if (!d?.last_seen) return "UNKNOWN";
-  if (Date.now() - d.last_seen > DEVICE_STALE_MS) return "UNKNOWN";
-  return d.status || "UNKNOWN";
+function lastSeenAgo(ts) {
+  if (!ts) return "never";
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
 }
 
-function buildSlaMessage({ title, device, status, label, uptimeMs }) {
+function formatSiteStatus(devRow) {
+  const stale = !devRow?.last_seen || Date.now() - devRow.last_seen > DEVICE_STALE_MS;
+  if (stale) {
+    const label = devRow?.site_status === 1 ? "ONLINE" : devRow?.site_status === 0 ? "OFFLINE" : "UNKNOWN";
+    return `${label} ⚠️ (last known — device unreachable)`;
+  }
+  if (devRow.site_status === 1) return "ONLINE ✅";
+  if (devRow.site_status === 0) return "OFFLINE ❌";
+  return "UNKNOWN ⚠️";
+}
+
+
+function buildSlaMessage({ title, device, devRow, label, uptimeMs }) {
   const p = slaPercent(uptimeMs);
   return (
     `📊 ${title}\n` +
-    `📟 ${device}\n` +
-    `📡 Status: ${status}\n` +
+    `📟 ${device}\n\n` +
+    `🌐 Site: ${formatSiteStatus(devRow)}\n` +
+    `(Device last seen: ${lastSeenAgo(devRow?.last_seen)})\n` +
     `📅 ${label}\n\n` +
     `SLA: ${p.toFixed(2)}%\n` +
     `Uptime: ${(uptimeMs / 3600000).toFixed(2)}h\n` +
@@ -428,16 +448,17 @@ app.post("/api/event", async (req, res) => {
     // HEARTBEAT: update last_seen and return OTA + reset_config status inline
     // Device reads this response — eliminates a separate GET /api/fw round trip
     if (event === "HEARTBEAT") {
-      const { ssid, ip } = req.body;
+      const { ssid, ip, site } = req.body;
       await dbRun(
-        `INSERT INTO devices(device,last_seen,status,wifi_ssid,wifi_ip)
-         VALUES(?,?,'ONLINE',?,?)
+        `INSERT INTO devices(device,last_seen,status,wifi_ssid,wifi_ip,site_status)
+         VALUES(?,?,'ONLINE',?,?,?)
          ON CONFLICT(device)
          DO UPDATE SET last_seen=excluded.last_seen,
                        status='ONLINE',
                        wifi_ssid=COALESCE(excluded.wifi_ssid, devices.wifi_ssid),
-                       wifi_ip=COALESCE(excluded.wifi_ip, devices.wifi_ip)`,
-        [dev, now, ssid || null, ip || null]
+                       wifi_ip=COALESCE(excluded.wifi_ip, devices.wifi_ip),
+                       site_status=COALESCE(excluded.site_status, devices.site_status)`,
+        [dev, now, ssid || null, ip || null, site !== undefined ? site : null]
       );
       await dbRun(
         `INSERT INTO firmware_control(device)
@@ -471,13 +492,17 @@ app.post("/api/event", async (req, res) => {
     const status =
       event === "ONLINE" || event === "OFFLINE" ? event : null;
 
+    const pinSite =
+      event === "ONLINE" ? 1 : event === "OFFLINE" ? 0 : null;
+
     await dbRun(
-      `INSERT INTO devices(device,last_seen,status)
-       VALUES(?,?,?)
+      `INSERT INTO devices(device,last_seen,status,site_status)
+       VALUES(?,?,?,?)
        ON CONFLICT(device)
        DO UPDATE SET last_seen=excluded.last_seen,
-                     status=COALESCE(excluded.status, devices.status)`,
-      [dev, now, status]
+                     status=COALESCE(excluded.status, devices.status),
+                     site_status=COALESCE(excluded.site_status, devices.site_status)`,
+      [dev, now, status, pinSite]
     );
 
     if (event === "DAILY_SYNC")
@@ -946,7 +971,7 @@ async function handleUpdate(bot, update) {
       const match = rows.find(r => epochSecToLabel(r.day) === yLabel);
 
       const devRow = await dbGet(
-        `SELECT last_seen,status FROM devices WHERE device=?`,
+        `SELECT last_seen, status, site_status FROM devices WHERE device=?`,
         [bot.deviceNorm]
       );
 
@@ -954,9 +979,10 @@ async function handleUpdate(bot, update) {
         await tg(
           bot.token,
           chat,
-          "⚠️ No DAILY_SYNC for yesterday\n" +
-          "📟 " + bot.device + "\n" +
-          "📡 Status: " + computeLiveStatus(devRow)
+          "📟 " + bot.device + "\n\n" +
+          "🌐 Site: " + formatSiteStatus(devRow) + "\n" +
+          "(Device last seen: " + lastSeenAgo(devRow?.last_seen) + ")\n\n" +
+          "⚠️ No DAILY_SYNC for yesterday"
         );
       } else {
         await tg(
@@ -965,7 +991,7 @@ async function handleUpdate(bot, update) {
           buildSlaMessage({
             title: "Yesterday SLA (24h)",
             device: bot.device,
-            status: computeLiveStatus(devRow),
+            devRow,
             label: yLabel,
             uptimeMs: match.uptime_ms,
           })
@@ -1120,7 +1146,7 @@ setInterval(async () => {
       try {
         const yLabel = epochSecToLabel(todayEpochSec() - 86400);
         const devRow = await dbGet(
-          `SELECT last_seen, status, last_broadcast FROM devices WHERE device=?`,
+          `SELECT last_seen, status, site_status, last_broadcast FROM devices WHERE device=?`,
           [bot.deviceNorm]
         );
         if (devRow?.last_broadcast === yLabel) continue;
@@ -1146,7 +1172,7 @@ setInterval(async () => {
           buildSlaMessage({
             title: "Yesterday SLA (24h)",
             device: bot.device,
-            status: computeLiveStatus(devRow),
+            devRow,
             label: yLabel,
             uptimeMs: match.uptime_ms,
           })

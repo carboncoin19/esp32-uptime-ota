@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.12"
+#define FW_VERSION  "1.0.15"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -509,14 +509,6 @@ void setup() {
     Serial.println("[WiFi] IP obtained — backoff reset instantly");
   }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
 
-  const esp_partition_t* r = esp_ota_get_running_partition();
-  esp_ota_img_states_t s;
-  if (esp_ota_get_state_partition(r, &s) == ESP_OK &&
-      s == ESP_OTA_IMG_PENDING_VERIFY) {
-    esp_ota_mark_app_valid_cancel_rollback();
-    queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"OTA_SUCCESS\",\"version\":\"" FW_VERSION "\"}");
-  }
-
   pinMode(TRACK_PIN, INPUT_PULLDOWN);
   pinMode(MIRROR_PIN, OUTPUT);
   attachInterrupt(digitalPinToInterrupt(TRACK_PIN), onPowerRestored, RISING);
@@ -556,6 +548,17 @@ void setup() {
 #endif
   }
   Serial.println("[CFG] Device name: " + deviceName);
+
+  // OTA rollback verification — must run after deviceName is loaded so the event has a valid device field
+  {
+    const esp_partition_t* r = esp_ota_get_running_partition();
+    esp_ota_img_states_t s;
+    if (esp_ota_get_state_partition(r, &s) == ESP_OK &&
+        s == ESP_OTA_IMG_PENDING_VERIFY) {
+      esp_ota_mark_app_valid_cancel_rollback();
+      queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"OTA_SUCCESS\",\"version\":\"" FW_VERSION "\"}");
+    }
+  }
 
   // Load WiFi credentials from NVS BEFORE first connectWiFi() call
   if(prefs.getBool("cfg_ok", false)){
@@ -656,7 +659,8 @@ void loop() {
     Serial.println("[DIAG] Sending HEARTBEAT");
     jsonBuf = "{\"device\":\"" + deviceName + "\",\"event\":\"HEARTBEAT\","
               "\"ssid\":\"" + WiFi.SSID() + "\","
-              "\"ip\":\"" + WiFi.localIP().toString() + "\"}";
+              "\"ip\":\"" + WiFi.localIP().toString() + "\","
+              "\"site\":" + (confirmed ? "1" : "0") + "}";
     String hbResp = postJSONResponse(jsonBuf);
     // Piggyback: server returns OTA + reset_config in heartbeat reply — no extra SSL round trip
     if (hbResp.length() > 0) handleServerResponse(hbResp);
