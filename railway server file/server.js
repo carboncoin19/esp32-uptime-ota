@@ -174,7 +174,10 @@ db.all(`PRAGMA table_info(devices)`, (err, cols) => {
   if (!hasCol("wifi_ip"))
     db.run(`ALTER TABLE devices ADD COLUMN wifi_ip TEXT`);
   if (!hasCol("last_broadcast"))
-    db.run(`ALTER TABLE devices ADD COLUMN last_broadcast TEXT`);
+    db.run(`ALTER TABLE devices ADD COLUMN last_broadcast TEXT`, err => {
+      if (err) console.error("❌ devices migration error (last_broadcast):", err.message);
+      else console.log("✅ devices: last_broadcast column added");
+    });
 });
 
 db.run(`
@@ -621,42 +624,6 @@ app.post("/api/event", async (req, res) => {
   }
 });
 
-/* ===================== OTA CHECK API ===================== */
-app.get("/api/fw/:device", async (req, res) => {
-  if (!firmwareSchemaReady)
-    return res.json({ update: false });
-  const dev = req.params.device.trim().toUpperCase();
-
-  try {
-    const row = await dbGet(
-      `SELECT latest_version, firmware_url,
-              update_requested, force_update, reset_config
-       FROM firmware_control
-       WHERE device=?`,
-      [dev]
-    );
-
-    // Send reset_config flag if set — do NOT clear here, only clear on WIFI_RESET confirmation
-    const resetConfig = row?.reset_config === 1;
-
-    if (!row || row.update_requested !== 1 || !row.latest_version || !row.firmware_url) {
-      return res.json({ update: false, reset_config: resetConfig });
-    }
-
-    res.json({
-      update: true,
-      version: row.latest_version,
-      url: row.firmware_url,
-      force: row.force_update === 1,
-      reset_config: resetConfig,
-      trigger: true
-    });
-  } catch (e) {
-    console.error("❌ /api/fw error:", e.message);
-    res.json({ update: false });
-  }
-});
-
 /* ===================== DEVICE CONFIG API ===================== */
 app.get("/api/config/:device", async (req, res) => {
   const dev = req.params.device.trim().toUpperCase();
@@ -795,24 +762,25 @@ async function handleUpdate(bot, update) {
   else if (cmd.startsWith("/setwifi")) {
     try {
       // Parse: /setwifi <ssid1> <pass1> <ssid2> <pass2>
-      // pass1, ssid2, pass2 are single tokens (no spaces).
-      // ssid1 may contain spaces — everything between /setwifi and the last 3 tokens.
+      // Use ! as space substitute in ssid1 and ssid2 only.
+      // pass1, ssid2, pass2 are single tokens. ssid1 may span multiple tokens.
       const tokens = cmd.trim().split(/\s+/);
-      // tokens[0] = "/setwifi", need at least 5 tokens total
-      // IMPORTANT: only ssid1 may contain spaces — ssid2, pass1, pass2 must be single words
       const USAGE =
         "❌ Usage: /setwifi <ssid1> <pass1> <ssid2> <pass2>\n" +
-        "Only ssid1 may contain spaces. ssid2, pass1, pass2 must be single words.\n" +
-        "Example (ssid1 has space): /setwifi Star Home 12345678 mifi 12345678\n" +
-        "Example (no spaces):       /setwifi mifi 12345678 Starlink abc123";
+        "Use ! in ssid1 and ssid2 where there is a space.\n" +
+        "Example: /setwifi Star!Home 12345678 My!Network abc123\n" +
+        "Example (no spaces): /setwifi mifi 12345678 Starlink abc123";
       if (tokens.length < 5) {
         await tg(bot.token, chat, USAGE);
         return;
       }
       const pass2 = tokens[tokens.length - 1];
-      const ssid2 = tokens[tokens.length - 2];
+      const ssid2Raw = tokens[tokens.length - 2];
       const pass1 = tokens[tokens.length - 3];
-      const ssid1 = tokens.slice(1, tokens.length - 3).join(" ");
+      const ssid1Raw = tokens.slice(1, tokens.length - 3).join(" ");
+      // Replace ! with space in SSIDs only
+      const ssid1 = ssid1Raw.replaceAll("!", " ");
+      const ssid2 = ssid2Raw.replaceAll("!", " ");
       // Guard: ssid1 must not be empty after parsing
       if (!ssid1.trim()) {
         await tg(bot.token, chat, USAGE);
@@ -1151,8 +1119,11 @@ setInterval(async () => {
     for (const bot of BOTS) {
       try {
         const yLabel = epochSecToLabel(todayEpochSec() - 86400);
-        const broadcastRow = await dbGet(`SELECT last_broadcast FROM devices WHERE device=?`, [bot.deviceNorm]);
-        if (broadcastRow?.last_broadcast === yLabel) continue;
+        const devRow = await dbGet(
+          `SELECT last_seen, status, last_broadcast FROM devices WHERE device=?`,
+          [bot.deviceNorm]
+        );
+        if (devRow?.last_broadcast === yLabel) continue;
 
         const rows = await dbAll(
           `SELECT day,uptime_ms FROM daily_uptime
@@ -1170,17 +1141,12 @@ setInterval(async () => {
           continue;
         }
 
-        const statusRow = await dbGet(
-          `SELECT last_seen,status FROM devices WHERE device=?`,
-          [bot.deviceNorm]
-        );
-
         await broadcast(
           bot.token,
           buildSlaMessage({
             title: "Yesterday SLA (24h)",
             device: bot.device,
-            status: computeLiveStatus(statusRow),
+            status: computeLiveStatus(devRow),
             label: yLabel,
             uptimeMs: match.uptime_ms,
           })

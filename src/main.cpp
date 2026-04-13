@@ -430,15 +430,8 @@ bool fetchConfig(){
     return false;
   }
 
-  auto getField=[&](const String& key)->String{
-    int idx=body.indexOf(key); if(idx<0) return String();
-    int q1=body.indexOf('"',idx+key.length()); if(q1<0) return String();
-    int q2=body.indexOf('"',q1+1); if(q2<0) return String();
-    return body.substring(q1+1,q2);
-  };
-
-  String s1=getField("\"wifi1_ssid\""), p1=getField("\"wifi1_pass\"");
-  String s2=getField("\"wifi2_ssid\""), p2=getField("\"wifi2_pass\"");
+  String s1=parseField(body,"\"wifi1_ssid\""), p1=parseField(body,"\"wifi1_pass\"");
+  String s2=parseField(body,"\"wifi2_ssid\""), p2=parseField(body,"\"wifi2_pass\"");
   if(s1.isEmpty()||p1.isEmpty()){ Serial.println("[CFG] Missing fields in response"); return false; }
 
   cfgWifi1SSID=s1; cfgWifi1Pass=p1;
