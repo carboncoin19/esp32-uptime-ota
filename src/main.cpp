@@ -411,6 +411,18 @@ void performOTA(String url, String ver){
 }
 
 /* ===================== REMOTE CONFIG ===================== */
+
+// Shared: parse a JSON string field value from a flat JSON body
+String parseField(const String& body, const String& key){
+  int idx = body.indexOf(key);
+  if(idx < 0) return String();
+  int q1 = body.indexOf('"', idx + key.length());
+  if(q1 < 0) return String();
+  int q2 = body.indexOf('"', q1 + 1);
+  if(q2 < 0) return String();
+  return body.substring(q1 + 1, q2);
+}
+
 void clearNvsConfig(){
   prefs.putBool("cfg_ok", false);
   prefs.remove("w1s"); prefs.remove("w1p");
@@ -454,17 +466,6 @@ bool fetchConfig(){
   postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_OK\","
            "\"wifi1\":\""+cfgWifi1SSID+"\",\"wifi2\":\""+cfgWifi2SSID+"\"}");
   return true;
-}
-
-// Shared: parse a JSON string field value from a flat JSON body
-String parseField(const String& body, const String& key){
-  int idx = body.indexOf(key);
-  if(idx < 0) return String();
-  int q1 = body.indexOf('"', idx + key.length());
-  if(q1 < 0) return String();
-  int q2 = body.indexOf('"', q1 + 1);
-  if(q2 < 0) return String();
-  return body.substring(q1 + 1, q2);
 }
 
 // Process a JSON body that may contain OTA or reset_config instructions.
