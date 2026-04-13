@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.19"
+#define FW_VERSION  "1.0.20"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -91,9 +91,7 @@ bool   cfgFetched    = false; // true once server fetch succeeds this boot
 bool lastStable=false, candidate=false, confirmed=false;
 bool internetOK=false, ntpReady=false;
 volatile bool otaInProgress=false;
-volatile bool powerRestoredISR=false; // set by TRACK_PIN interrupt, cleared in loop()
-volatile unsigned long lastISRFireMs=0; // ISR-level debounce timestamp
-volatile bool setupDone=false;        // guards ISR from firing before setup is complete
+volatile bool setupDone=false;
 bool preferWifi1Pending=false;
 bool wifi1NoInternet=false; // set when WiFi1 connects but fails internet — cleared after 10min on STARLINK
 bool pendingDailySync=false, pendingMonthlySync=false;
@@ -500,14 +498,8 @@ void handleServerResponse(const String& body){
   performOTA(fu, nv);
 }
 
-/* ===================== TRACK PIN ISR ===================== */
-void IRAM_ATTR onPowerRestored() {
-  unsigned long now = millis();
-  if (now - lastISRFireMs > 1000) {   // 1s debounce inside ISR — ignores contact bounce
-    lastISRFireMs = now;
-    powerRestoredISR = true;
-  }
-}
+/* ===================== TRACK PIN ===================== */
+// No ISR — WiFi backoff reset is handled in loop() after CONFIRM_MS debounce
 
 /* ===================== SETUP ===================== */
 void setup() {
@@ -527,7 +519,6 @@ void setup() {
 
   pinMode(TRACK_PIN, INPUT_PULLDOWN);
   pinMode(MIRROR_PIN, OUTPUT);
-  attachInterrupt(digitalPinToInterrupt(TRACK_PIN), onPowerRestored, RISING);
 
   prefs.begin("uptime", false);
 
@@ -622,13 +613,6 @@ void setup() {
 
 /* ===================== LOOP ===================== */
 void loop() {
-  // TRACK_PIN rising edge ISR fired — power restored, reset WiFi backoff immediately
-  if (powerRestoredISR && setupDone) {
-    powerRestoredISR = false;
-    wifiRetryInterval = WIFI_RETRY_MS;
-    lastWiFiAttempt = 0;
-    Serial.println("[ISR] Power restored on TRACK_PIN — WiFi backoff reset");
-  }
 
   connectWiFi();
   updateInternetHealth();
@@ -702,6 +686,8 @@ void loop() {
 
       if (confirmed) {
         onStart = now;
+        wifiRetryInterval = WIFI_RETRY_MS;  // power restored — reconnect immediately
+        lastWiFiAttempt = 0;
         jsonBuf = "{\"device\":\"" + deviceName + "\",\"event\":\"ONLINE\",\"time\":\"" + timestamp() + "\"}";
         queueEvent(jsonBuf);
       } else {
