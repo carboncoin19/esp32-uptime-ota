@@ -45,10 +45,10 @@ String deviceName;
 #define OTA_TIMEOUT   60000UL
 
 /* ===================== WIFI ===================== */
-#define WIFI1_SSID     "mifi"
+#define WIFI1_SSID     "ndoni"
 #define WIFI1_PASSWORD "12345678"
-#define WIFI2_SSID     "Star Home"
-#define WIFI2_PASSWORD "12345678"
+#define WIFI2_SSID     "STARLINK"
+#define WIFI2_PASSWORD "TrojanDelta"
 #define WIFI_RETURN_STABLE_MS 60000UL
 
 /* ===================== NETWORK ===================== */
