@@ -620,9 +620,14 @@ void loop() {
   // TRACK_PIN rising edge ISR fired — power restored, reset WiFi backoff immediately
   if (powerRestoredISR && setupDone) {
     powerRestoredISR = false;
-    wifiRetryInterval = WIFI_RETRY_MS;
-    lastWiFiAttempt = 0;
-    Serial.println("[ISR] Power restored on TRACK_PIN — WiFi backoff reset");
+    static unsigned long lastISRHandle = 0;
+    unsigned long isrNow = millis();
+    if (isrNow - lastISRHandle > 300) {   // 300ms debounce — suppress contact bounce
+      lastISRHandle = isrNow;
+      wifiRetryInterval = WIFI_RETRY_MS;
+      lastWiFiAttempt = 0;
+      Serial.println("[ISR] Power restored on TRACK_PIN — WiFi backoff reset");
+    }
   }
 
   connectWiFi();
