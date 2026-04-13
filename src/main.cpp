@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.17"
+#define FW_VERSION  "1.0.18"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
