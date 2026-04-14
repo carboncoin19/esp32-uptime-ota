@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.21"
+#define FW_VERSION  "1.0.22"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -245,9 +245,22 @@ void updateInternetHealth(){
 }
 
 /* ===================== HTTP ===================== */
+// DNS pre-check — fast failure before any blocking SSL call
+// Returns true if hostname resolves, false if DNS is down
+bool dnsReachable(){
+  IPAddress ip;
+  bool ok = WiFi.hostByName("uptime-bot-production-9a37.up.railway.app", ip);
+  if(!ok){
+    Serial.println("[NET] DNS failed — skipping HTTP, marking internet down");
+    internetOK = false;
+  }
+  return ok;
+}
+
 // Posts JSON and returns response body (empty string on failure)
 String postJSONResponse(const String& p){
   if(WiFi.status()!=WL_CONNECTED || !internetOK) return "";
+  if(!dnsReachable()) return "";
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(12000);
@@ -441,6 +454,7 @@ void clearNvsConfig(){
 
 bool fetchConfig(){
   if(WiFi.status()!=WL_CONNECTED || !internetOK) return false;
+  if(!dnsReachable()) return false;
   WiFiClientSecure c; c.setInsecure(); c.setTimeout(12000);
   HTTPClient h; h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   String url = String(SERVER_BASE_URL) + "/api/config/" + deviceName;
