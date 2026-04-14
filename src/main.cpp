@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.20"
+#define FW_VERSION  "1.0.21"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -650,6 +650,12 @@ void loop() {
               "\"ip\":\"" + WiFi.localIP().toString() + "\","
               "\"time\":\"" + timestamp() + "\"}";
     queueEvent(jsonBuf);
+    // If TRACK_PIN was already HIGH on boot, report ONLINE now —
+    // the loop() transition block only fires on LOW->HIGH change, so boot state is never sent otherwise
+    if (confirmed) {
+      Serial.println("[DIAG] TRACK_PIN HIGH on boot — queuing ONLINE");
+      queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"ONLINE\",\"time\":\"" + timestamp() + "\"}");
+    }
     fwReportSent = true;
   }
 
