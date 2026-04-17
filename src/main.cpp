@@ -154,26 +154,40 @@ void connectWiFi(){
   Serial.print("[WiFi] Connecting to ");
   Serial.println(ssid);
 
-  WiFi.disconnect(false);
-  delay(200);
+  // Full radio reset — prevents stale driver state causing false NO_SSID_AVAIL
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(300);
+  WiFi.mode(WIFI_STA);
+  delay(100);
 
-  WiFi.begin(ssid, pass);
-  activeWiFi = (wifiPhase == 0) ? 1 : 2;
-
-  // Wait up to 15s for connection result
-  unsigned long t = millis();
-  while (millis() - t < 15000) {
-    delay(500);
-    wl_status_t st = WiFi.status();
-    if (st == WL_CONNECTED) {
-      Serial.println("[WiFi] Connected! IP: " + WiFi.localIP().toString());
-      wifiRetryInterval = WIFI_RETRY_MS;
-      break;
+  // Attempt connection — retry once on NO_SSID_AVAIL (beacon may have been missed)
+  bool connected = false;
+  for (int attempt = 1; attempt <= 2 && !connected; attempt++) {
+    if (attempt == 2) {
+      Serial.println("[WiFi] NO_SSID_AVAIL — retrying same network once");
+      WiFi.disconnect(true);
+      delay(500);
     }
-    if (st == WL_CONNECT_FAILED)  { Serial.println("[WiFi][ERR] CONNECT_FAILED (wrong password or MAC filtered)"); break; }
-    if (st == WL_NO_SSID_AVAIL)   { Serial.println("[WiFi][ERR] NO_SSID_AVAIL (network not found)"); break; }
-    if (st == WL_CONNECTION_LOST) { Serial.println("[WiFi][ERR] CONNECTION_LOST"); break; }
+    WiFi.begin(ssid, pass);
+    activeWiFi = (wifiPhase == 0) ? 1 : 2;
+
+    unsigned long t = millis();
+    while (millis() - t < 15000) {
+      delay(500);
+      wl_status_t st = WiFi.status();
+      if (st == WL_CONNECTED) {
+        Serial.println("[WiFi] Connected! IP: " + WiFi.localIP().toString());
+        wifiRetryInterval = WIFI_RETRY_MS;
+        connected = true;
+        break;
+      }
+      if (st == WL_CONNECT_FAILED)  { Serial.println("[WiFi][ERR] CONNECT_FAILED (wrong password or MAC filtered)"); goto done; }
+      if (st == WL_NO_SSID_AVAIL)   { Serial.println("[WiFi][ERR] NO_SSID_AVAIL (network not found)"); break; }
+      if (st == WL_CONNECTION_LOST) { Serial.println("[WiFi][ERR] CONNECTION_LOST"); goto done; }
+    }
   }
+  done:
   if (WiFi.status() == WL_CONNECTED) return; // success — keep wifiPhase, don't touch backoff
 
   Serial.print("[WiFi][ERR] Failed, status=");
