@@ -332,7 +332,7 @@ async function broadcast(token, text) {
     `SELECT chat_id FROM chats WHERE bot_token=?`,
     [token]
   );
-  await Promise.all(chats.map(c => tg(token, c.chat_id, text)));
+  await Promise.allSettled(chats.map(c => tg(token, c.chat_id, text)));
 }
 
 /* ===================== EVENT API ===================== */
@@ -440,9 +440,13 @@ app.post("/api/event", async (req, res) => {
   const { device, event, uptime_ms, day, month, time, version } = req.body;
   if (event !== "HEARTBEAT") console.log("EVENT:", req.body);
   const now = Date.now();
-  const dev = normalizeDevice(device);
 
-  if (!event || !dev) return res.json({ ok: true });
+  if (!device || typeof device !== "string" || !device.trim())
+    return res.status(400).json({ ok: false, error: "missing device" });
+  if (!event || typeof event !== "string")
+    return res.status(400).json({ ok: false, error: "missing event" });
+
+  const dev = normalizeDevice(device);
 
   try {
     // HEARTBEAT: update last_seen and return OTA + reset_config status inline

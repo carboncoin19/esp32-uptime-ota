@@ -191,7 +191,7 @@ bool checkInternetOnce(){
   if(WiFi.status()!=WL_CONNECTED) return false;
   // Use hostname-based check so DNS failure correctly marks internet as down
   IPAddress ip;
-  if(!WiFi.hostByName("connectivitycheck.gstatic.com", ip)) return false;
+  if(!WiFi.hostByName("connectivitycheck.gstatic.com", ip, 5000)) return false;
   HTTPClient h; h.setTimeout(NET_HTTP_TIMEOUT_MS);
   h.begin("http://connectivitycheck.gstatic.com/generate_204");
   int c=h.GET(); h.end(); return c==204;
@@ -249,7 +249,7 @@ void updateInternetHealth(){
 // Returns true if hostname resolves, false if DNS is down
 bool dnsReachable(){
   IPAddress ip;
-  bool ok = WiFi.hostByName("uptime-bot-production-9a37.up.railway.app", ip);
+  bool ok = WiFi.hostByName("uptime-bot-production-9a37.up.railway.app", ip, 5000);
   if(!ok){
     Serial.println("[NET] DNS failed — skipping HTTP, marking internet down");
     internetOK = false;
@@ -519,6 +519,9 @@ void handleServerResponse(const String& body){
 void setup() {
   jsonBuf.reserve(256);
   Serial.begin(9600);
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+  { unsigned long _t = millis(); while (!Serial && millis() - _t < 2000) delay(10); }
+#endif
 
   WiFi.mode(WIFI_STA);
 
@@ -547,24 +550,32 @@ void setup() {
     Serial.println("[CFG] Device name set from build default: " + deviceName);
 #else
     // New device path: block on serial until name is entered via USB.
+    // Times out after 60s and reboots so a headless device doesn't hang forever.
     Serial.println("\n=== DEVICE NOT CONFIGURED ===");
     Serial.println("Type device name and press Enter.");
     Serial.println("Must match TG_BOT_DEVICE_N on Railway (e.g. NDONI-UPTIME):");
-    while (true) {
-      if (Serial.available()) {
-        String input = Serial.readStringUntil('\n');
-        input.trim();
-        if (input.length() > 0 && input.length() <= 32) {
-          deviceName = input;
-          prefs.putString("dev_name", deviceName);
-          Serial.println("Saved: " + deviceName + " — rebooting...");
-          delay(500);
-          ESP.restart();
-        } else {
-          Serial.println("Invalid name (1-32 chars). Try again:");
+    {
+      unsigned long nameDeadline = millis() + 60000UL;
+      while (millis() < nameDeadline) {
+        if (Serial.available()) {
+          String input = Serial.readStringUntil('\n');
+          input.trim();
+          if (input.length() > 0 && input.length() <= 32) {
+            deviceName = input;
+            prefs.putString("dev_name", deviceName);
+            Serial.println("Saved: " + deviceName + " — rebooting...");
+            delay(500);
+            ESP.restart();
+          } else {
+            Serial.println("Invalid name (1-32 chars). Try again:");
+            nameDeadline = millis() + 60000UL; // reset timeout on bad input
+          }
         }
+        delay(50);
       }
-      delay(50);
+      Serial.println("[CFG] No name entered within 60s — rebooting...");
+      delay(1000);
+      ESP.restart();
     }
 #endif
   }
@@ -711,7 +722,7 @@ void loop() {
         jsonBuf = "{\"device\":\"" + deviceName + "\",\"event\":\"ONLINE\",\"time\":\"" + timestamp() + "\"}";
         queueEvent(jsonBuf);
       } else {
-        unsigned long sess = now - onStart;
+        unsigned long sess = (now >= onStart) ? (now - onStart) : 0;
         dayOnMs += sess;
         monthOnMs += sess;
         prefs.putULong("dayOn", dayOnMs);
@@ -800,11 +811,13 @@ void loop() {
   }
 
   if (pendingDailySync && millis() - pendingDaySince > 21600000UL) {
+    Serial.println("[SYNC] DAILY_SYNC abandoned after 6h — uptime data lost for epoch " + String(pendingDayEpoch));
     pendingDailySync = false;
     prefs.putBool("pendingDS", false);
   }
 
   if (pendingMonthlySync && millis() - pendingMonthSince > 21600000UL) {
+    Serial.println("[SYNC] MONTHLY_SYNC abandoned after 6h — uptime data lost for epoch " + String(pendingMonthEpoch));
     pendingMonthlySync = false;
     prefs.putBool("pendingMS", false);
   }
@@ -815,7 +828,7 @@ void loop() {
   if (confirmed && millis() - lastNvsFlush > 60000UL) {
     unsigned long flushNow = millis();
     lastNvsFlush = flushNow;
-    unsigned long sessNow = flushNow - onStart;
+    unsigned long sessNow = (flushNow >= onStart) ? (flushNow - onStart) : 0;
     prefs.putULong("dayOn", dayOnMs + sessNow);
     prefs.putULong("monthOn", monthOnMs + sessNow);
   }
