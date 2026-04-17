@@ -205,7 +205,7 @@ bool checkInternetOnce(){
   if(WiFi.status()!=WL_CONNECTED) return false;
   // Use hostname-based check so DNS failure correctly marks internet as down
   IPAddress ip;
-  if(!WiFi.hostByName("connectivitycheck.gstatic.com", ip, 5000)) return false;
+  if(!WiFi.hostByName("connectivitycheck.gstatic.com", ip)) return false;
   HTTPClient h; h.setTimeout(NET_HTTP_TIMEOUT_MS);
   h.begin("http://connectivitycheck.gstatic.com/generate_204");
   int c=h.GET(); h.end(); return c==204;
@@ -263,7 +263,7 @@ void updateInternetHealth(){
 // Returns true if hostname resolves, false if DNS is down
 bool dnsReachable(){
   IPAddress ip;
-  bool ok = WiFi.hostByName("uptime-bot-production-9a37.up.railway.app", ip, 5000);
+  bool ok = WiFi.hostByName("uptime-bot-production-9a37.up.railway.app", ip);
   if(!ok){
     Serial.println("[NET] DNS failed — skipping HTTP, marking internet down");
     internetOK = false;
