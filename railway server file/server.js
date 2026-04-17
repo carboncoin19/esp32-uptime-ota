@@ -259,9 +259,10 @@ function normalizeDevice(device) {
 
 /* ===================== TIME HELPERS ===================== */
 function todayEpochSec() {
-  const d = new Date(Date.now() + TZ_OFFSET_MS);
-  d.setHours(0, 0, 0, 0);
-  return Math.floor(d.getTime() / 1000);
+  // Compute midnight in Nigeria time (UTC+1) without relying on setHours(),
+  // which uses the JS engine's local timezone (UTC on Railway) — not Nigeria time.
+  const nowNigeria = Date.now() + TZ_OFFSET_MS;
+  return Math.floor(nowNigeria / DAY_MS) * 86400 - (TZ_OFFSET_MS / 1000);
 }
 
 function epochSecToLabel(s) {
@@ -509,17 +510,23 @@ app.post("/api/event", async (req, res) => {
       [dev, now, status, pinSite]
     );
 
-    if (event === "DAILY_SYNC")
+    if (event === "DAILY_SYNC") {
+      if (!day || typeof day !== "number")
+        return res.status(400).json({ ok: false, error: "missing day" });
       await dbRun(
         `INSERT OR REPLACE INTO daily_uptime VALUES(?,?,?)`,
         [dev, day, uptime_ms || 0]
       );
+    }
 
-    if (event === "MONTHLY_SYNC")
+    if (event === "MONTHLY_SYNC") {
+      if (!month || typeof month !== "number")
+        return res.status(400).json({ ok: false, error: "missing month" });
       await dbRun(
         `INSERT OR REPLACE INTO monthly_uptime VALUES(?,?,?)`,
         [dev, month, uptime_ms || 0]
       );
+    }
 
     if (event === "ONLINE" || event === "OFFLINE") {
       const msg =

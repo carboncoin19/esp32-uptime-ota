@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.22"
+#define FW_VERSION  "1.0.27"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -261,13 +261,12 @@ void updateInternetHealth(){
 /* ===================== HTTP ===================== */
 // DNS pre-check — fast failure before any blocking SSL call
 // Returns true if hostname resolves, false if DNS is down
+// Does NOT set internetOK=false: gstatic already confirmed internet is up;
+// Railway hostname may simply be uncached on 3G carrier DNS.
 bool dnsReachable(){
   IPAddress ip;
   bool ok = WiFi.hostByName("uptime-bot-production-9a37.up.railway.app", ip);
-  if(!ok){
-    Serial.println("[NET] DNS failed — skipping HTTP, marking internet down");
-    internetOK = false;
-  }
+  if(!ok) Serial.println("[NET] DNS failed — skipping HTTP, will retry next cycle");
   return ok;
 }
 
@@ -314,7 +313,7 @@ bool trySyncMonthly(uint32_t m, unsigned long u) {
 /* ===================== OTA ===================== */
 void reportOTA(String s,String v){ postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"OTA_"+s+"\",\"version\":\""+v+"\"}"); }
 
-void finalizeUptimeBeforeOTA(){ if(!confirmed) return; unsigned long n=millis(); unsigned long s=n-onStart; dayOnMs+=s; monthOnMs+=s; prefs.putULong("dayOn",dayOnMs); prefs.putULong("monthOn",monthOnMs); confirmed=false; MIRROR_WRITE(LOW); queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"OFFLINE\",\"time\":\""+timestamp()+"\"}"); processQueue(); }
+void finalizeUptimeBeforeOTA(){ if(!confirmed) return; unsigned long n=millis(); unsigned long s=(n>=onStart)?(n-onStart):0; dayOnMs+=s; monthOnMs+=s; prefs.putULong("dayOn",dayOnMs); prefs.putULong("monthOn",monthOnMs); confirmed=false; MIRROR_WRITE(LOW); queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"OFFLINE\",\"time\":\""+timestamp()+"\"}"); processQueue(); }
 
 void performOTA(String url, String ver){
   Serial.println("[OTA] ===== OTA START =====");
@@ -664,6 +663,7 @@ void loop() {
     Serial.println("[WiFi] Switching back to WiFi1 to test internet");
     WiFi.disconnect(false); // false = keep NVS credentials, avoid unnecessary flash wear
     wifiPhase = 0; // next connectWiFi() tries WiFi1
+    lastWiFiAttempt = 0; // reconnect immediately, don't wait for backoff interval
     // preferWifi1Pending stays true — cleared only when WiFi1 confirms internet
   }
 
