@@ -315,15 +315,20 @@ function buildSlaMessage({ title, device, devRow, label, uptimeMs }) {
 
 /* ===================== TELEGRAM HELPERS ===================== */
 async function tg(token, chat, text) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
     const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chat, text }),
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     const data = await r.json();
     if (!data.ok) console.error(`❌ TG send failed chat=${chat}:`, data.description);
   } catch (e) {
+    clearTimeout(timer);
     console.error(`❌ TG fetch error chat=${chat}:`, e.message);
   }
 }

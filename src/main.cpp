@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.27"
+#define FW_VERSION  "1.0.28"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -276,9 +276,9 @@ String postJSONResponse(const String& p){
   if(!dnsReachable()) return "";
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(12000);
+  client.setTimeout(NET_HTTP_TIMEOUT_MS);
   HTTPClient h;
-  h.setTimeout(12000);
+  h.setTimeout(NET_HTTP_TIMEOUT_MS);
   if(!h.begin(client, SERVER_URL)) return "";
   h.addHeader("Content-Type","application/json");
   int c = h.POST(p);
@@ -468,7 +468,7 @@ void clearNvsConfig(){
 bool fetchConfig(){
   if(WiFi.status()!=WL_CONNECTED || !internetOK) return false;
   if(!dnsReachable()) return false;
-  WiFiClientSecure c; c.setInsecure(); c.setTimeout(12000);
+  WiFiClientSecure c; c.setInsecure(); c.setTimeout(NET_HTTP_TIMEOUT_MS);
   HTTPClient h; h.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   String url = String(SERVER_BASE_URL) + "/api/config/" + deviceName;
   if(!h.begin(c,url)) return false;
@@ -476,14 +476,14 @@ bool fetchConfig(){
   if(code!=200){
     h.end();
     Serial.println("[CFG] Config fetch failed code="+String(code));
-    postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"http_"+String(code)+"\"}");
+    queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"http_"+String(code)+"\"}");
     return false;
   }
   String body = h.getString(); h.end();
   Serial.println("[CFG] Config response: "+body);
   if(body.indexOf("\"ok\":true")<0){
     Serial.println("[CFG] Server returned ok:false — /setwifi may not have been run");
-    postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"no_config\"}");
+    queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_FAIL\",\"reason\":\"no_config\"}");
     return false;
   }
 
@@ -499,8 +499,8 @@ bool fetchConfig(){
   prefs.putString("w2s",cfgWifi2SSID); prefs.putString("w2p",cfgWifi2Pass);
   prefs.putBool("cfg_ok",true);
   Serial.println("[CFG] WiFi config saved to NVS: "+cfgWifi1SSID+"/"+cfgWifi2SSID);
-  postJSON("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_OK\","
-           "\"wifi1\":\""+cfgWifi1SSID+"\",\"wifi2\":\""+cfgWifi2SSID+"\"}");
+  queueEvent("{\"device\":\"" + deviceName + "\",\"event\":\"WIFI_CFG_OK\","
+             "\"wifi1\":\""+cfgWifi1SSID+"\",\"wifi2\":\""+cfgWifi2SSID+"\"}");
   return true;
 }
 
@@ -698,6 +698,8 @@ void loop() {
     fwReportSent = true;
   }
 
+  bool didNetworkCall = false;
+
   if (!otaInProgress && WiFi.status() == WL_CONNECTED && internetOK &&
       millis() - lastHeartbeat > HEARTBEAT_MS) {
     lastHeartbeat = millis();
@@ -709,6 +711,7 @@ void loop() {
     String hbResp = postJSONResponse(jsonBuf);
     // Piggyback: server returns OTA + reset_config in heartbeat reply — no extra SSL round trip
     if (hbResp.length() > 0) handleServerResponse(hbResp);
+    didNetworkCall = true;
   }
 
   bool raw = digitalRead(TRACK_PIN);
@@ -747,10 +750,11 @@ void loop() {
     }
   }
 
-  if (ntpReady) {
+  if (ntpReady && !didNetworkCall) {
     // Snapshot onStart before any rollover block mutates it.
     // Both daily and monthly rollover fire on the 1st of the month;
     // without this, the monthly eff calculation sees the already-reset onStart.
+    // didNetworkCall guard: prevents heartbeat + sync from stacking two TLS calls in one loop pass.
     unsigned long savedOnStart = onStart;
 
     uint32_t t = todayEpoch();
