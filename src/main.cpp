@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.28"
+#define FW_VERSION  "1.0.29"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -100,6 +100,8 @@ bool fwReportSent=false; // send FW_REPORT only after network is ready
 uint8_t activeWiFi=0;
 uint8_t wifiPhase=0; // 0=WIFI1, 1=WIFI2 — exposed so preferWifi1 can reset it
 uint8_t netFailCount=0;
+uint8_t noSsidMissCount=0; // consecutive NO_SSID_AVAIL/timeout fails on current network
+bool inConnectRoutine=false; // true while connectWiFi() is actively running — suppresses DISCONNECTED event
 
 unsigned long wifiRetryInterval = WIFI_RETRY_MS; // grows on failure, resets on connect
 
@@ -154,20 +156,38 @@ void connectWiFi(){
   Serial.print("[WiFi] Connecting to ");
   Serial.println(ssid);
 
-  // Full radio reset — prevents stale driver state causing false NO_SSID_AVAIL
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  delay(300);
-  WiFi.mode(WIFI_STA);
-  delay(100);
+  inConnectRoutine = true; // suppress DISCONNECTED events fired by our own disconnect calls
 
-  // Attempt connection — retry once on NO_SSID_AVAIL (beacon may have been missed)
+  // Full radio reset only every 5th attempt — prevents stale driver state causing false
+  // NO_SSID_AVAIL without the cold-start churn that kills background beacon scanning.
+  static uint8_t hardResetCounter = 0;
+  if (++hardResetCounter >= 5) {
+    hardResetCounter = 0;
+    Serial.println("[WiFi][DBG] hard reset (radio off/on)");
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    delay(300);
+    WiFi.mode(WIFI_STA);
+    delay(100);
+  } else {
+    Serial.print("[WiFi][DBG] soft reset (attempt, hardReset in ");
+    Serial.print(5 - hardResetCounter);
+    Serial.println(")");
+    WiFi.disconnect(true);
+    delay(100);
+  }
+
+  // Up to 4 attempts on NO_SSID_AVAIL — covers missed beacons and brief interference.
+  // CONNECT_FAILED / CONNECTION_LOST are hard failures and exit immediately.
   bool connected = false;
-  for (int attempt = 1; attempt <= 2 && !connected; attempt++) {
-    if (attempt == 2) {
-      Serial.println("[WiFi] NO_SSID_AVAIL — retrying same network once");
+  bool hardFail  = false;
+
+  for (int attempt = 1; attempt <= 4 && !connected && !hardFail; attempt++) {
+    if (attempt > 1) {
+      Serial.print("[WiFi] NO_SSID_AVAIL — retry ");
+      Serial.println(attempt);
       WiFi.disconnect(true);
-      delay(500);
+      delay(1500); // allow beacon cycle to complete before re-scanning
     }
     WiFi.begin(ssid, pass);
     activeWiFi = (wifiPhase == 0) ? 1 : 2;
@@ -182,20 +202,47 @@ void connectWiFi(){
         connected = true;
         break;
       }
-      if (st == WL_CONNECT_FAILED)  { Serial.println("[WiFi][ERR] CONNECT_FAILED (wrong password or MAC filtered)"); goto done; }
+      if (st == WL_CONNECT_FAILED)  { Serial.println("[WiFi][ERR] CONNECT_FAILED (wrong password or MAC filtered)"); hardFail = true; break; }
       if (st == WL_NO_SSID_AVAIL)   { Serial.println("[WiFi][ERR] NO_SSID_AVAIL (network not found)"); break; }
-      if (st == WL_CONNECTION_LOST) { Serial.println("[WiFi][ERR] CONNECTION_LOST"); goto done; }
+      if (st == WL_CONNECTION_LOST) { Serial.println("[WiFi][ERR] CONNECTION_LOST"); hardFail = true; break; }
     }
   }
-  done:
-  if (WiFi.status() == WL_CONNECTED) return; // success — keep wifiPhase, don't touch backoff
 
+  if (WiFi.status() == WL_CONNECTED) {
+    inConnectRoutine = false;
+    return; // success — keep wifiPhase
+  }
+
+  inConnectRoutine = false;
   Serial.print("[WiFi][ERR] Failed, status=");
   Serial.println(WiFi.status());
 
-  // Failed — switch to other network on next attempt and double backoff
-  wifiPhase = (wifiPhase + 1) % 2;
-  wifiRetryInterval = min(wifiRetryInterval * 2, WIFI_RETRY_MAX_MS);
+  // Hard failures (wrong password, MAC block) → switch network immediately.
+  // Soft failures (NO_SSID_AVAIL, timeout) → switch only after 3 consecutive misses
+  // so a transient missed beacon doesn't immediately redirect to the other network.
+  bool switchPhase;
+  if (hardFail) {
+    switchPhase = true;
+    noSsidMissCount = 0;
+  } else {
+    noSsidMissCount++;
+    switchPhase = (noSsidMissCount >= 3);
+    if (switchPhase) {
+      noSsidMissCount = 0;
+    } else {
+      Serial.print("[WiFi] SSID miss ");
+      Serial.print(noSsidMissCount);
+      Serial.println("/3 — retrying same network");
+    }
+  }
+
+  if (switchPhase) {
+    wifiPhase = (wifiPhase + 1) % 2;
+    Serial.println("[WiFi] Switching to other network");
+  }
+
+  // 1.5x backoff — reaches 5min cap slower, giving more retry windows during flapping.
+  wifiRetryInterval = min(wifiRetryInterval * 3 / 2, WIFI_RETRY_MAX_MS);
   Serial.print("[WiFi] Next retry in ");
   Serial.print(wifiRetryInterval / 1000);
   Serial.println("s");
@@ -537,6 +584,12 @@ void setup() {
 #endif
 
   WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);          // don't let driver overwrite our NVS credentials on every begin()
+  WiFi.setAutoReconnect(false);    // disable driver auto-reconnect — we manage reconnection manually
+  WiFi.setSleep(false);            // disable modem sleep — prevents missed beacons causing false NO_SSID_AVAIL
+#ifdef CONFIG_IDF_TARGET_ESP32C3
+  WiFi.setTxPower(WIFI_POWER_11dBm); // reduce TX power peak — critical for Super Mini LDO headroom
+#endif
 
   // Reset backoff the instant IP is obtained — fires asynchronously in WiFi driver,
   // not waiting for the next connectWiFi() poll. Catches router restoration immediately.
@@ -546,6 +599,17 @@ void setup() {
     firstNetCheck = true; // trigger immediate internet check on every reconnect
     Serial.println("[WiFi] IP obtained — backoff reset instantly");
   }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
+
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (inConnectRoutine) {
+      Serial.println("[WiFi][DBG] disconnect during connect routine — suppressed");
+      return;
+    }
+    lastWiFiAttempt   = 0;
+    wifiRetryInterval = WIFI_RETRY_MS;
+    noSsidMissCount   = 0;
+    Serial.println("[WiFi] Disconnected mid-session — backoff reset for immediate retry");
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
   pinMode(TRACK_PIN, INPUT_PULLDOWN);
   pinMode(MIRROR_PIN, OUTPUT);
