@@ -684,6 +684,31 @@ app.get("/api/config/:device", async (req, res) => {
   }
 });
 
+/* ===================== LEGACY FIRMWARE POLL API ===================== */
+// Used by firmware v1.0.4 and older — polls this endpoint separately instead of
+// reading OTA instructions from the heartbeat response (added in later firmware).
+// Safe to keep permanently — newer firmware ignores this endpoint entirely.
+app.get("/api/fw/:device", async (req, res) => {
+  const dev = req.params.device.trim().toUpperCase();
+  try {
+    const row = await dbGet(
+      `SELECT latest_version, firmware_url, update_requested, force_update
+       FROM firmware_control WHERE device=?`,
+      [dev]
+    );
+    if (!row || !row.update_requested) return res.json({ update: false });
+    res.json({
+      update: true,
+      version: row.latest_version,
+      url: row.firmware_url,
+      force: row.force_update === 1,
+    });
+  } catch (e) {
+    console.error("❌ /api/fw error:", e.message);
+    res.status(500).json({ update: false });
+  }
+});
+
 /* ===================== TELEGRAM UPDATE HANDLER ===================== */
 async function handleUpdate(bot, update) {
   const chat = update.message?.chat?.id;
