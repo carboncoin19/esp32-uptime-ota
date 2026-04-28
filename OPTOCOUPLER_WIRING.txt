@@ -1,0 +1,98 @@
+========================================================
+  ESP32 UPTIME MONITOR — OPTOCOUPLER WIRING GUIDE
+  PC817C — 5V Signal Input to GPIO27 (TRACK_PIN)
+========================================================
+
+PURPOSE
+-------
+Isolates the monitored 5V power signal from the ESP32
+GPIO pin using an optocoupler. Protects the ESP32 from
+voltage spikes and noise on the input signal line.
+
+
+COMPONENTS
+----------
+  - PC817C Optocoupler (x1)
+  - 390Ω Resistor      (x1)  — input current limiter (R1)
+  - 10KΩ Resistor      (x1)  — GPIO pull-down (R2)
+
+
+PC817C PIN LAYOUT (top view, notch facing left)
+------------------------------------------------
+
+        ┌──────┐
+ Pin 1  │1    4│  Pin 4
+ Pin 2  │2    3│  Pin 3
+        └──────┘
+    LED SIDE    TRANSISTOR SIDE
+
+  Pin 1 — Anode   (+)  LED input
+  Pin 2 — Cathode (-)  LED return
+  Pin 3 — Collector    Transistor output
+  Pin 4 — Emitter      Transistor supply
+
+
+WIRING DIAGRAM
+--------------
+
+  MONITORED POWER SIDE (5V)          ESP32 SIDE (3.3V)
+
+                    ┌──────────────────────┐
+                    │       PC817C         │
+                    │                      │
+  [5V Signal+] ─[390Ω]─► Pin1 (Anode+)   │           3.3V
+                    │                      │             │
+  [5V Signal-] ────────► Pin2 (Cathode-)  │            10K
+                    │                      │             │
+                    │    Pin4 (Emitter) ───┼─────── GPIO27 (TRACK_PIN)
+                    │                      │             │
+                    │    Pin3 (Collector)──┼────────── 10K
+                    │                      │             │
+                    └──────────────────────┘            GND
+
+
+STEP-BY-STEP CONNECTIONS
+------------------------
+
+  INPUT SIDE (LED):
+    1. 5V Signal (+) → 390Ω resistor → PC817C Pin 1
+    2. 5V Signal (-) → PC817C Pin 2
+
+  OUTPUT SIDE (Transistor):
+    3. ESP32 3.3V    → PC817C Pin 4 (Emitter)
+    4. PC817C Pin 3 (Collector) → ESP32 GPIO27 (TRACK_PIN)
+    5. 10KΩ resistor between GPIO27 and GND
+
+
+HOW IT WORKS
+------------
+  Signal HIGH (5V) → LED lights up inside PC817C
+                   → Transistor conducts
+                   → GPIO27 reads HIGH (3.3V)
+
+  Signal LOW  (0V) → LED off
+                   → Transistor off
+                   → GPIO27 pulled LOW via 10K resistor
+
+
+R1 REFERENCE (other voltages)
+------------------------------
+  5V  signal → 390Ω   (this installation)
+  12V signal → 1KΩ
+  24V signal -> 2.2KΩ
+
+
+NOTES
+-----
+  - PC817C is the high-gain variant (CTR 200-400%).
+    R1 can be increased to 470Ω or 560Ω for less LED
+    stress while still maintaining a clean output signal.
+
+  - The two signal grounds (5V side and ESP32 side)
+    are fully isolated — no electrical connection
+    between them. Only light crosses the barrier.
+
+  - No firmware changes required. GPIO27 behaviour
+    is identical to direct wiring.
+
+========================================================

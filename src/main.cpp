@@ -21,7 +21,7 @@
 // Device name is NOT compiled in — loaded from NVS on boot.
 // Set once via USB serial on first flash, persists across OTA updates.
 String deviceName;
-#define FW_VERSION  "1.0.29"
+#define FW_VERSION  "1.0.30"
 
 /* ===================== PINS ===================== */
 #ifndef TRACK_PIN
@@ -53,10 +53,10 @@ String deviceName;
 #define WIFI1_PASSWORD "12345678"
 #endif
 #ifndef WIFI2_SSID
-#define WIFI2_SSID     "STARLINK"
+#define WIFI2_SSID     "MifI"
 #endif
 #ifndef WIFI2_PASSWORD
-#define WIFI2_PASSWORD "TrojanDelta"
+#define WIFI2_PASSWORD "12345678"
 #endif
 #define WIFI_RETURN_STABLE_MS 60000UL
 
