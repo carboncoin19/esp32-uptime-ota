@@ -22,6 +22,12 @@ STATUS & MONITORING
   Shows current firmware version on the device vs latest
   version set on the server.
 
+/health
+  Shows WiFi signal strength (RSSI), free heap, and the last
+  boot's reset reason (flags PANIC/WDT/BROWNOUT as a crash).
+  Device is also proactively alerted on if it goes silent for
+  longer than the normal heartbeat interval (~4 min).
+
 ------------------------------------------------------------
 OTA FIRMWARE UPDATES
 ------------------------------------------------------------

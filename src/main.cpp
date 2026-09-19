@@ -337,6 +337,25 @@ String postJSONResponse(const String& p){
 
 bool postJSON(const String& p){ return postJSONResponse(p).length() > 0; }
 
+/* ===================== DIAGNOSTICS ===================== */
+// Reset reason doubles as crash/panic reporting — PANIC/INT_WDT/TASK_WDT/WDT/BROWNOUT
+// mean the previous boot crashed rather than shut down cleanly.
+const char* resetReasonStr(){
+  switch(esp_reset_reason()){
+    case ESP_RST_POWERON:   return "POWERON";
+    case ESP_RST_SW:        return "SW_RESTART";
+    case ESP_RST_PANIC:     return "PANIC";
+    case ESP_RST_INT_WDT:   return "INT_WDT";
+    case ESP_RST_TASK_WDT:  return "TASK_WDT";
+    case ESP_RST_WDT:       return "WDT";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+    case ESP_RST_EXT:       return "EXT";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "UNKNOWN";
+  }
+}
+
 /* ===================== QUEUE ===================== */
 void queueEvent(const String&p){ if(eventQueue.size() >= 100) eventQueue.pop_front(); eventQueue.push_back(p); }
 void processQueue(){ static unsigned long last=0; if(otaInProgress||eventQueue.empty()||WiFi.status()!=WL_CONNECTED||!internetOK||millis()-last<5000) return; if(postJSON(eventQueue.front())) eventQueue.pop_front(); last=millis(); }
@@ -751,6 +770,9 @@ void loop() {
               "\"version\":\"" FW_VERSION "\","
               "\"ssid\":\"" + WiFi.SSID() + "\","
               "\"ip\":\"" + WiFi.localIP().toString() + "\","
+              "\"reset_reason\":\"" + resetReasonStr() + "\","
+              "\"free_heap\":" + String(ESP.getFreeHeap()) + ","
+              "\"rssi\":" + String(WiFi.RSSI()) + ","
               "\"time\":\"" + timestamp() + "\"}";
     queueEvent(jsonBuf);
     // If TRACK_PIN was already HIGH on boot, report ONLINE now —
@@ -771,6 +793,8 @@ void loop() {
     jsonBuf = "{\"device\":\"" + deviceName + "\",\"event\":\"HEARTBEAT\","
               "\"ssid\":\"" + WiFi.SSID() + "\","
               "\"ip\":\"" + WiFi.localIP().toString() + "\","
+              "\"rssi\":" + String(WiFi.RSSI()) + ","
+              "\"free_heap\":" + String(ESP.getFreeHeap()) + ","
               "\"site\":" + (confirmed ? "1" : "0") + "}";
     String hbResp = postJSONResponse(jsonBuf);
     // Piggyback: server returns OTA + reset_config in heartbeat reply — no extra SSL round trip

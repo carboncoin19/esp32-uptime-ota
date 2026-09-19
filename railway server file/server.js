@@ -18,6 +18,7 @@ const TZ_OFFSET_MS = 3600000; // Nigeria +1
 const DAY_MS = 86400000;
 const MIDNIGHT_CHECK_MS = 15000;
 const DEVICE_STALE_MS = 4 * 60 * 1000;
+const HEALTH_CHECK_MS = 60 * 1000;
 
 /* ===================== FIRMWARE URL MAP ===================== */
 const FW_URLS = {
@@ -183,6 +184,14 @@ db.all(`PRAGMA table_info(devices)`, (err, cols) => {
       if (err) console.error("❌ devices migration error (site_status):", err.message);
       else console.log("✅ devices: site_status column added");
     });
+  if (!hasCol("rssi"))
+    db.run(`ALTER TABLE devices ADD COLUMN rssi INTEGER`);
+  if (!hasCol("free_heap"))
+    db.run(`ALTER TABLE devices ADD COLUMN free_heap INTEGER`);
+  if (!hasCol("reset_reason"))
+    db.run(`ALTER TABLE devices ADD COLUMN reset_reason TEXT`);
+  if (!hasCol("silent_alert_sent"))
+    db.run(`ALTER TABLE devices ADD COLUMN silent_alert_sent INTEGER DEFAULT 0`);
 });
 
 db.run(`
@@ -458,18 +467,38 @@ app.post("/api/event", async (req, res) => {
     // HEARTBEAT: update last_seen and return OTA + reset_config status inline
     // Device reads this response — eliminates a separate GET /api/fw round trip
     if (event === "HEARTBEAT") {
-      const { ssid, ip, site } = req.body;
+      const { ssid, ip, site, rssi, free_heap } = req.body;
+
+      // Check silence state BEFORE overwriting last_seen, so we can send a recovery
+      // notice if the silent-device alert loop had already flagged this device.
+      const prevRow = await dbGet(
+        `SELECT last_seen, silent_alert_sent FROM devices WHERE device=?`,
+        [dev]
+      );
+
       await dbRun(
-        `INSERT INTO devices(device,last_seen,status,wifi_ssid,wifi_ip,site_status)
-         VALUES(?,?,'ONLINE',?,?,?)
+        `INSERT INTO devices(device,last_seen,status,wifi_ssid,wifi_ip,site_status,rssi,free_heap,silent_alert_sent)
+         VALUES(?,?,'ONLINE',?,?,?,?,?,0)
          ON CONFLICT(device)
          DO UPDATE SET last_seen=excluded.last_seen,
                        status='ONLINE',
                        wifi_ssid=COALESCE(excluded.wifi_ssid, devices.wifi_ssid),
                        wifi_ip=COALESCE(excluded.wifi_ip, devices.wifi_ip),
-                       site_status=COALESCE(excluded.site_status, devices.site_status)`,
-        [dev, now, ssid || null, ip || null, site !== undefined ? site : null]
+                       site_status=COALESCE(excluded.site_status, devices.site_status),
+                       rssi=COALESCE(excluded.rssi, devices.rssi),
+                       free_heap=COALESCE(excluded.free_heap, devices.free_heap),
+                       silent_alert_sent=0`,
+        [dev, now, ssid || null, ip || null, site !== undefined ? site : null,
+         rssi !== undefined ? rssi : null, free_heap !== undefined ? free_heap : null]
       );
+
+      if (prevRow?.silent_alert_sent === 1) {
+        const silentMs = now - (prevRow.last_seen || now);
+        const silentMin = Math.max(1, Math.round(silentMs / 60000));
+        for (const bot of BOTS)
+          if (bot.deviceNorm === dev)
+            await broadcast(bot.token, `✅ ${dev} back online after ${silentMin}m silence`);
+      }
       await dbRun(
         `INSERT INTO firmware_control(device)
          VALUES(?)
@@ -544,7 +573,7 @@ app.post("/api/event", async (req, res) => {
     }
 
     if (event === "FW_REPORT" || event === "BOOT_REPORT") {
-      const { ssid, ip } = req.body;
+      const { ssid, ip, reset_reason, free_heap, rssi } = req.body;
       await dbRun(
         `INSERT INTO firmware_control(device, current_version)
          VALUES(?,?)
@@ -567,19 +596,27 @@ app.post("/api/event", async (req, res) => {
       // BOOT_REPORT also carries WiFi info — send connected notification
       if (event === "BOOT_REPORT" && ssid) {
         await dbRun(
-          `INSERT INTO devices(device,last_seen,status,wifi_ssid,wifi_ip)
-           VALUES(?,?,'ONLINE',?,?)
+          `INSERT INTO devices(device,last_seen,status,wifi_ssid,wifi_ip,reset_reason,free_heap,rssi,silent_alert_sent)
+           VALUES(?,?,'ONLINE',?,?,?,?,?,0)
            ON CONFLICT(device)
            DO UPDATE SET last_seen=excluded.last_seen,
                          status='ONLINE',
                          wifi_ssid=excluded.wifi_ssid,
-                         wifi_ip=excluded.wifi_ip`,
-          [dev, now, ssid, ip || null]
+                         wifi_ip=excluded.wifi_ip,
+                         reset_reason=COALESCE(excluded.reset_reason, devices.reset_reason),
+                         free_heap=COALESCE(excluded.free_heap, devices.free_heap),
+                         rssi=COALESCE(excluded.rssi, devices.rssi),
+                         silent_alert_sent=0`,
+          [dev, now, ssid, ip || null,
+           reset_reason || null, free_heap !== undefined ? free_heap : null, rssi !== undefined ? rssi : null]
         );
+        const crashLike = ["PANIC", "INT_WDT", "TASK_WDT", "WDT", "BROWNOUT"].includes(reset_reason);
+        const bootIcon = crashLike ? "⚠️" : "📶";
         const msg =
-          `📶 ${dev} booted\n` +
+          `${bootIcon} ${dev} booted\n` +
           `FW: ${version || "?"} | SSID: ${ssid}\n` +
           `IP: ${ip || "?"}\n` +
+          `Reset reason: ${reset_reason || "unknown"}${crashLike ? " (crash)" : ""}\n` +
           `🕒 ${formatTime(now)}`;
         for (const bot of BOTS)
           if (bot.deviceNorm === dev)
@@ -979,6 +1016,32 @@ async function handleUpdate(bot, update) {
     return;
   }
 
+  else if (cmd === "/health") {
+    try {
+      const row = await dbGet(
+        `SELECT rssi, free_heap, reset_reason, last_seen FROM devices WHERE device=?`,
+        [bot.deviceNorm]
+      );
+      if (!row || row.rssi === null) {
+        await tg(bot.token, chat, "🩺 " + bot.device + "\nNo health data yet — waiting for next heartbeat (~2 min)");
+        return;
+      }
+      const signal = row.rssi >= -60 ? "Good" : row.rssi >= -75 ? "Fair" : "Weak";
+      await tg(
+        bot.token, chat,
+        "🩺 " + bot.device + " Health\n" +
+        "Signal: " + row.rssi + " dBm (" + signal + ")\n" +
+        "Free heap: " + (row.free_heap !== null ? Math.round(row.free_heap / 1024) + " KB" : "unknown") + "\n" +
+        "Last reset reason: " + (row.reset_reason || "unknown") + "\n" +
+        "Last seen: " + lastSeenAgo(row.last_seen)
+      );
+    } catch (e) {
+      console.error("/health error:", e);
+      await tg(bot.token, chat, "⚠️ Health info unavailable");
+    }
+    return;
+  }
+
   else if (cmd === "/fw") {
     try {
       const row = await dbGet(
@@ -1129,7 +1192,7 @@ async function handleUpdate(bot, update) {
   else if (cmd.startsWith("/")) {
     await tg(bot.token, chat,
       "❓ Unknown command: " + cmd.split(" ")[0] + "\n" +
-      "Available: /status /statusweek /statusmonth /fw /wifi /viewwifi /setwifi /resetwifi /update /forceupdate /stopupdate"
+      "Available: /status /statusweek /statusmonth /fw /wifi /health /viewwifi /setwifi /resetwifi /update /forceupdate /stopupdate"
     );
   }
 }
@@ -1174,6 +1237,33 @@ async function registerWebhook(bot, attempt = 1) {
     }
   }
 }
+
+/* ===================== SILENT DEVICE ALERT ===================== */
+// Proactively flags a device that has stopped heartbeating — /status only surfaces
+// staleness when someone asks. Threshold matches what /status already calls "stale"
+// (DEVICE_STALE_MS) so the two stay consistent. silent_alert_sent gates against
+// re-alerting every 60s while a device stays down; HEARTBEAT/BOOT_REPORT clear it
+// and send the recovery notice once the device reports back in.
+setInterval(async () => {
+  for (const bot of BOTS) {
+    try {
+      const row = await dbGet(
+        `SELECT last_seen, silent_alert_sent FROM devices WHERE device=?`,
+        [bot.deviceNorm]
+      );
+      if (!row || !row.last_seen || row.silent_alert_sent === 1) continue;
+
+      const silentMs = Date.now() - row.last_seen;
+      if (silentMs <= DEVICE_STALE_MS) continue;
+
+      const silentMin = Math.round(silentMs / 60000);
+      await broadcast(bot.token, `📵 ${bot.device} silent for ${silentMin}m — no heartbeat received`);
+      await dbRun(`UPDATE devices SET silent_alert_sent=1 WHERE device=?`, [bot.deviceNorm]);
+    } catch (e) {
+      console.error(`❌ Silent-device check error for ${bot.device}:`, e.message);
+    }
+  }
+}, HEALTH_CHECK_MS);
 
 /* ===================== DAILY SLA BROADCAST ===================== */
 setInterval(async () => {
