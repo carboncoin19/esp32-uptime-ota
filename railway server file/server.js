@@ -753,6 +753,21 @@ async function handleUpdate(bot, update) {
 
   if (!chat || !cmd) return;
 
+  // Normalized first token for plain (no-argument) command matching — strips
+  // invisible zero-width chars some mobile keyboards insert after autocomplete,
+  // trims real + non-breaking whitespace, and drops a "@BotUsername" suffix
+  // Telegram appends to commands in group chats. Commands that take arguments
+  // (/update, /forceupdate, /setwifi) still parse from the raw `cmd` below.
+  // Char codes 8203/8204/8205/65279 = zero-width space/non-joiner/joiner/BOM —
+  // spelled via fromCharCode rather than \u escapes to avoid editor/encoding mangling.
+  const ZERO_WIDTH_CHARS = [8203, 8204, 8205, 65279].map(c => String.fromCharCode(c)).join("");
+  const ZERO_WIDTH_CHARS_RE = new RegExp("[" + ZERO_WIDTH_CHARS + "]", "g");
+  const cmdToken = cmd
+    .replace(ZERO_WIDTH_CHARS_RE, "")
+    .trim()
+    .split(/\s+/)[0]
+    .split("@")[0];
+
   try {
     await dbRun(
       `INSERT OR IGNORE INTO chats(chat_id,bot_token) VALUES(?,?)`,
@@ -763,7 +778,7 @@ async function handleUpdate(bot, update) {
     // Continue processing the command even if registration fails
   }
 
-  if (cmd === "/start") {
+  if (cmdToken === "/start") {
     await tg(bot.token, chat, `📡 ${bot.device} uptime monitor active.`);
     return;
   }
@@ -913,7 +928,7 @@ async function handleUpdate(bot, update) {
     return;
   }
 
-  else if (cmd === "/resetwifi") {
+  else if (cmdToken === "/resetwifi") {
     try {
       const cfgRow = await dbGet(
         `SELECT wifi1_ssid FROM device_config WHERE device=?`,
@@ -943,7 +958,7 @@ async function handleUpdate(bot, update) {
     return;
   }
 
-  else if (cmd === "/stopupdate") {
+  else if (cmdToken === "/stopupdate") {
     try {
       await dbRun(
         `UPDATE firmware_control SET update_requested=0, force_update=0 WHERE device=?`,
@@ -963,7 +978,7 @@ async function handleUpdate(bot, update) {
     return;
   }
 
-  else if (cmd === "/viewwifi") {
+  else if (cmdToken === "/viewwifi") {
     try {
       const row = await dbGet(
         `SELECT wifi1_ssid, wifi1_pass, wifi2_ssid, wifi2_pass FROM device_config WHERE device=?`,
@@ -990,7 +1005,7 @@ async function handleUpdate(bot, update) {
     return;
   }
 
-  else if (cmd === "/wifi") {
+  else if (cmdToken === "/wifi") {
     try {
       const row = await dbGet(
         `SELECT wifi_ssid, wifi_ip, last_seen FROM devices WHERE device=?`,
@@ -1016,7 +1031,7 @@ async function handleUpdate(bot, update) {
     return;
   }
 
-  else if (cmd === "/health") {
+  else if (cmdToken === "/health") {
     try {
       const row = await dbGet(
         `SELECT rssi, free_heap, reset_reason, last_seen FROM devices WHERE device=?`,
@@ -1042,7 +1057,7 @@ async function handleUpdate(bot, update) {
     return;
   }
 
-  else if (cmd === "/fw") {
+  else if (cmdToken === "/fw") {
     try {
       const row = await dbGet(
         `SELECT current_version, latest_version FROM firmware_control WHERE device=?`,
@@ -1062,7 +1077,7 @@ async function handleUpdate(bot, update) {
     }
   }
 
-  else if (cmd === "/status") {
+  else if (cmdToken === "/status") {
     try {
       const today = todayEpochSec();
       const yLabel = epochSecToLabel(today - 86400);
@@ -1107,7 +1122,7 @@ async function handleUpdate(bot, update) {
     }
   }
 
-  else if (cmd === "/statusweek") {
+  else if (cmdToken === "/statusweek") {
     try {
       const rows = await dbAll(
         `SELECT day, uptime_ms
@@ -1152,7 +1167,7 @@ async function handleUpdate(bot, update) {
     }
   }
 
-  else if (cmd === "/statusmonth") {
+  else if (cmdToken === "/statusmonth") {
     try {
       const rows = await dbAll(
         `SELECT day, uptime_ms
@@ -1189,9 +1204,9 @@ async function handleUpdate(bot, update) {
     }
   }
 
-  else if (cmd.startsWith("/")) {
+  else if (cmdToken.startsWith("/")) {
     await tg(bot.token, chat,
-      "❓ Unknown command: " + cmd.split(" ")[0] + "\n" +
+      "❓ Unknown command: " + cmdToken + "\n" +
       "Available: /status /statusweek /statusmonth /fw /wifi /health /viewwifi /setwifi /resetwifi /update /forceupdate /stopupdate"
     );
   }
