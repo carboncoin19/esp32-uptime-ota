@@ -1,0 +1,44 @@
+name: Sync server.js to uptime-bot (Railway deploy source)
+
+# Railway's GitHub integration builds from carboncoin19/uptime-bot, not this
+# repo — see project_ndoni_architecture.md. This workflow keeps that repo's
+# server.js in sync automatically so a push here can't silently go un-deployed
+# again the way the /health command fix did for ~4 months.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "railway server file/server.js"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout esp32-uptime-ota
+        uses: actions/checkout@v4
+
+      - name: Checkout uptime-bot
+        uses: actions/checkout@v4
+        with:
+          repository: carboncoin19/uptime-bot
+          token: ${{ secrets.UPTIME_BOT_PUSH_TOKEN }}
+          path: uptime-bot
+
+      - name: Sync server.js
+        run: cp "railway server file/server.js" uptime-bot/server.js
+
+      - name: Commit and push if changed
+        working-directory: uptime-bot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "server.js unchanged, nothing to sync."
+            exit 0
+          fi
+          git add server.js
+          git commit -m "sync: server.js from esp32-uptime-ota@${{ github.sha }}
+
+Auto-synced by .github/workflows/sync-server-to-uptime-bot.yml"
+          git push
