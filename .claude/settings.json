@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.platformio/penv/Scripts/pio.exe run:*)",
+      "Bash(~/.platformio/penv/Scripts/pio.exe device:*)",
+      "Bash(~/.platformio/penv/Scripts/pio.exe boards:*)",
+      "Bash(~/.platformio/penv/Scripts/python.exe ~/.platformio/packages/tool-esptoolpy/esptool.py*)",
+      "Bash(python -m esptool*)",
+      "Bash(powershell.exe -Command \"Get-PnpDevice -Class Ports*\")",
+      "Bash(curl -s \"https://uptime-bot-production-9a37.up.railway.app/__debug/*\")"
+    ]
+  }
+}
