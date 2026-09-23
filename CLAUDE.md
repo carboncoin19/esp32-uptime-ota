@@ -62,14 +62,16 @@ powershell.exe -Command "Get-PnpDevice -Class Ports | Select-Object Name, Device
 ```
 
 Releasing new firmware (triggers CI build + GitHub Release with all board
-binaries attached):
+binaries attached). First bump `FW_VERSION` in `src/main.cpp` — the tag
+must match it exactly (`v1.1.7` ↔ `"1.1.7"`) or CI fails the release.
+Tags continue from `v1.1.x`; never go back to `v1.0.x`.
 
 ```bash
 git add .
 git commit -m "..."
-git tag v1.0.X
+git tag v1.1.X
 git push origin main
-git push origin v1.0.X
+git push origin v1.1.X
 ```
 
 The tagged commit must already be pushed to `main` before pushing the tag —

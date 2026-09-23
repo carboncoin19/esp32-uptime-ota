@@ -102,8 +102,13 @@ TRIGGER
 The build runs automatically when you push a version tag.
 No manual steps needed after that — GitHub does the rest.
 
-git tag v1.0.5
-git push origin v1.0.5
+FIRST set FW_VERSION in src/main.cpp to the same number as the
+tag (tag v1.1.7 <-> #define FW_VERSION "1.1.7") and commit it.
+CI fails the release if they don't match. Tags continue from
+the latest v1.1.x — don't go back to v1.0.x.
+
+git tag v1.1.7
+git push origin v1.1.7
 
 These are the commands to push your local changes to GitHub (run in the VS Code terminal):
 

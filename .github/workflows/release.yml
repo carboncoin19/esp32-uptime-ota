@@ -1,6 +1,7 @@
 name: Build & Release Firmware
 
-# Triggers when you push a tag like: v1.0.13
+# Triggers when you push a tag like: v1.1.7
+# The tag must match FW_VERSION in src/main.cpp (tag v1.1.7 <-> "1.1.7").
 on:
   push:
     tags:
@@ -16,6 +17,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # Devices report FW_VERSION, not the tag name — fail fast if they differ
+      - name: Check tag matches FW_VERSION
+        run: |
+          FW=$(sed -nE 's/^#define FW_VERSION +"([^"]+)".*/\1/p' src/main.cpp)
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "tag=$TAG FW_VERSION=$FW"
+          if [ "$FW" != "$TAG" ]; then
+            echo "::error::Tag v$TAG does not match FW_VERSION \"$FW\" in src/main.cpp. Bump FW_VERSION, commit, then re-tag."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5

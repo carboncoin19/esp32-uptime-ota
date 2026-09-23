@@ -92,10 +92,13 @@ Pushing a `v*` tag triggers CI, which builds every environment and
 attaches the binaries to a GitHub Release. Devices then update over the
 air via the `/update <version>` Telegram command.
 
+First set `FW_VERSION` in `src/main.cpp` to the release number and commit
+it. The tag must match (`v1.1.7` ↔ `"1.1.7"`), or CI refuses to build.
+
 ```bash
-git tag v1.0.X
+git tag v1.1.X
 git push origin main       # the tagged commit must be on main first
-git push origin v1.0.X
+git push origin v1.1.X
 ```
 
 ## Backend
