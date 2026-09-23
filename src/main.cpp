@@ -109,7 +109,6 @@ unsigned long lastDebounce=0, candidateSince=0, onStart=0;
 unsigned long lastWiFiAttempt=0, lastHeartbeat=0;
 unsigned long lastNetCheck=0, internetStableSince=0;
 bool firstNetCheck=true; // skip 60s wait on first internet check after boot
-unsigned long pendingDaySince=0, pendingMonthSince=0;
 
 unsigned long dayOnMs=0, monthOnMs=0;
 unsigned long pendingDayUptime=0, pendingMonthUptime=0;
@@ -715,8 +714,6 @@ void setup() {
   pendingMonthlySync = prefs.getBool("pendingMS", false);
   pendingMonthEpoch = prefs.getUInt("pMonth", monthStartEpoch());
   pendingMonthUptime = prefs.getULong("pMonthUp", 0);
-  if (pendingDailySync) pendingDaySince = millis();
-  if (pendingMonthlySync) pendingMonthSince = millis();
 
   // FW_REPORT moved to loop() after network is stable
 
@@ -851,7 +848,6 @@ void loop() {
       pendingDailySync = true;
       pendingDayEpoch = dayEpoch;
       pendingDayUptime = eff;
-      pendingDaySince = millis();
 
       // Reset counters immediately to prevent re-inflation on next loop
       dayEpoch = t;
@@ -886,7 +882,6 @@ void loop() {
       pendingMonthlySync = true;
       pendingMonthEpoch = monthEpoch;
       pendingMonthUptime = eff;
-      pendingMonthSince = millis();
 
       // Reset counters immediately to prevent re-inflation on next loop
       monthEpoch = m;
@@ -916,17 +911,9 @@ void loop() {
     }
   }
 
-  if (pendingDailySync && millis() - pendingDaySince > 21600000UL) {
-    Serial.println("[SYNC] DAILY_SYNC abandoned after 6h — uptime data lost for epoch " + String(pendingDayEpoch));
-    pendingDailySync = false;
-    prefs.putBool("pendingDS", false);
-  }
-
-  if (pendingMonthlySync && millis() - pendingMonthSince > 21600000UL) {
-    Serial.println("[SYNC] MONTHLY_SYNC abandoned after 6h — uptime data lost for epoch " + String(pendingMonthEpoch));
-    pendingMonthlySync = false;
-    prefs.putBool("pendingMS", false);
-  }
+  // Pending daily/monthly syncs are never abandoned — they stay in NVS and
+  // keep retrying every 30s (above) no matter how long the network is down,
+  // so an outage spanning midnight doesn't silently drop that day's total.
 
   // Periodic NVS flush — preserve uptime across unexpected power-off
   // Include current session time so a power-cut during ONLINE doesn't lose accumulation
