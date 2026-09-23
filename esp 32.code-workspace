@@ -2,10 +2,6 @@
 	"folders": [
 		{
 			"path": "."
-		},
-		{
-			"name": "esp 32 pdu driver",
-			"path": "../esp 32 pdu driver"
 		}
 	],
 	"settings": {}
